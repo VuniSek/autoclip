@@ -281,3 +281,50 @@
 - Catatan: `git clone` dari github.com sungguhan tidak diuji (butuh repo publik +
   jaringan ke GitHub); yang diuji adalah `git clone` dari repo git lokal melalui
   `file://`, yang memakai kode `git clone` yang persis sama.
+
+## F-013 | memperbaiki P-013 (unduhan terlihat "stuck" di Colab)
+- Perubahan (file dan apa yang diubah):
+  - `src/downloader.py`:
+    - Tambah `_human_size()` + `make_progress_hook(every=PROGRESS_INTERVAL)` sebagai
+      `progress_hooks` untuk yt-dlp. Hook mencetak
+      `[unduh] xx.x% 12.3 MB/50.0 MB 4.5 MB/s ETA 12s` maksimal tiap 2 detik, plus
+      baris `selesai: <nama> (ukuran, WxH)` saat tiap format selesai. Tetap memakai
+      `quiet/noprogress` supaya format baris konsisten dan log bersih.
+    - Tambah `build_format(max_height)`: dengan batas tinggi memakai
+      `bv*[height<=H]+ba/b[height<=H]/bv*+ba/best`; tanpa batas (None/0) tetap
+      `bv*+ba/best`.
+    - `download()` menambah parameter `max_height`, mencetak format yang dipakai,
+      ditambah pesan "kalau lama tidak bergerak…", `fragment_retries: 5`, dan
+      `socket_timeout: 30` supaya koneksi macet gagal dengan pesan, bukan menggantung.
+    - `except Exception` di sekitar `extract_info` dibungkus jadi `DownloadError` dengan
+      daftar penyebab (video privat, age restriction, YouTube memblokir IP) dan saran
+      `!pip install -U yt-dlp`.
+  - `src/config.py`: variabel baru `max_source_height` (default `1080`, `0` = tanpa
+    batas) beserta dimasukkan ke `public_summary()` dan validasi `>= 360`.
+  - `main.py`: log "(unduhan dari URL: progress…)" + "(batas resolusi sumber: 1080p)"
+    dan mengirim `max_height=cfg.max_source_height` ke `downloader.download()`.
+  - `.env.example`: baris `MAX_SOURCE_HEIGHT=1080`.
+  - `README.md`: tabel `.env` + bagian troubleshooting memakai flag ini.
+- Alasan: tanpa progress, unduhan 4K (679 MB) terlihat identik dengan hang — pengguna
+  tidak bisa membedakan "jalan" dari "macet". Setelah progress ditampilkan, penyebabnya
+  juga jelas: file 4K memangDicekUK besar. Karena hasil akhir hanya 1080x1920, membatasi
+  tinggi sumber adalah perbaikan yang tepat sasaran (10× lebih ringan untuk video uji).
+- Hasil pengujian ulang:
+  - Hook sintetis (4 status downloading + finished): persentase, ukuran, kecepatan,
+    dan ETA benar; kasus tanpa `total_bytes` dan `speed=0` handled (`?`).
+  - Unduhan nyata Big Buck Bunny tanpa batas: 679 MB, progress tiap ~2 detik (reproduksi
+    masalah: sangat lama, tanpa output sama sekali).
+  - Unduhan sama dengan `max_height=720`: **68,0 MB, 1280x720** (10× lebih kecil),
+    progress "0.0% -> 99.2% -> selesai" tampil normal.
+  - Unduhan nyata "Me at the zoo" dengan batas 720: 320x240 (varian tertinggi yang
+    tersedia), `finished` menampilkan resolusi -> hook bekerja juga tanpa estimasi total.
+  - Percobaan pertama dengan video sama habis `HTTP Error 403: Forbidden` -> bukan bug
+    kode (percobaan kedua setelah 20 detik berhasil, 1280x720). Jalur galat diuji
+    langsung: pesannya rapi, menyebut kemungkinan blokir IP dan `!pip install -U yt-dlp`.
+  - `build_format()` diuji untuk None/0/720/1080/2160; validasi config menolak
+    `MAX_SOURCE_HEIGHT=200` dengan pesan jelas.
+  - Alur penuh `main.py` dengan file lokal tetap `SELESAI. 1 klip`;
+    `tests/test_highlight.py` **7/7 lulus**; `--verbose` menampilkan
+    `MAX_SOURCE_HEIGHT = 1080`.
+- Catatan: progress tidak bisa di-render di panel output statis Kolab, hanya di stream
+  stdout — kalau cell di-scroll ke bawah, baris `[unduh] …` tetap ada di riwayat.

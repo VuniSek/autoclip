@@ -6,12 +6,16 @@ import json
 import re
 import shutil
 import subprocess
+import time
 from pathlib import Path
 
 from .config import INPUT_DIR, TEMP_DIR
 
 VIDEO_EXTENSIONS = {".mp4", ".mkv", ".webm", ".mov", ".avi", ".m4v", ".flv", ".ts"}
 URL_RE = re.compile(r"^(https?://|www\.)", re.IGNORECASE)
+
+# Jarak waktu minimal antara dua baris progress (detik).
+PROGRESS_INTERVAL = 2.0
 
 
 class DownloadError(RuntimeError):
@@ -51,7 +55,76 @@ def probe_duration(video: Path) -> float:
         raise DownloadError(f"Tidak bisa membaca durasi dari {video}") from exc
 
 
-def download(source: str, workdir: Path | None = None) -> tuple[Path, dict]:
+def _human_size(num_bytes: float) -> str:
+    for unit in ("B", "KB", "MB", "GB"):
+        if num_bytes < 1024 or unit == "GB":
+            return f"{num_bytes:.1f} {unit}"
+        num_bytes /= 1024
+    return f"{num_bytes:.1f} GB"
+
+
+def make_progress_hook(every: float = PROGRESS_INTERVAL):
+    """Hook progress yt-dlp -> cetak persentase/kecepatan/ETA ke stdout.
+
+    Wajib karena opts memakai `noprogress=True`; tanpa hook ini proses unduhan
+    terlihat menggantung sama sekali di Colab (lihat problem.md P-013).
+    """
+    last = {"t": 0.0, "first": True}
+
+    def hook(d: dict) -> None:
+        status = d.get("status")
+        now = time.monotonic()
+        if status == "downloading":
+            got = float(d.get("downloaded_bytes") or 0)
+            total = float(d.get("total_bytes") or d.get("total_bytes_estimate") or 0)
+            speed = float(d.get("speed") or 0)
+            eta = d.get("eta")
+            if last["first"] or now - last["t"] >= every:
+                last["first"] = False
+                last["t"] = now
+                if total > 0:
+                    pct = f"{min(100.0, got / total * 100):5.1f}%"
+                    size = f"{_human_size(got)}/{_human_size(total)}"
+                else:
+                    pct = "   ?  "
+                    size = f"{_human_size(got)}/-"
+                speed_txt = f"{_human_size(speed)}/s" if speed else "   ?/s"
+                eta_txt = f"{int(eta)}s" if eta is not None else "  ?s"
+                print(
+                    f"  [unduh] {pct}  {size}  {speed_txt}  ETA {eta_txt}",
+                    flush=True,
+                )
+        elif status == "finished":
+            filename = d.get("filename") or ""
+            try:
+                size_txt = _human_size(Path(filename).stat().st_size)
+            except OSError:
+                size_txt = "tidak diketahui"
+            info = d.get("info_dict") or {}
+            res = ""
+            if info.get("width") and info.get("height"):
+                res = f", {info['width']}x{info['height']}"
+            print(f"  [unduh] selesai: {Path(filename).name} ({size_txt}{res})", flush=True)
+
+    return hook
+
+
+def build_format(max_height: int | None = None) -> str:
+    """Pilih format dengan batas tinggi agar unduhan tidak rechazar file 4K raksasa.
+
+    Tanpa batas, `best` bisa memilih video 4K ( hundreds MB ) padahal hasil akhir
+    hanya 1080x1920 - unduhan jadi sangat lama tanpa ada yang kelihatan bergerak
+    (lihat problem.md P-013).
+    """
+    if not max_height or max_height <= 0:
+        return "bv*+ba/best"
+    h = int(max_height)
+    return f"bv*[height<={h}]+ba/b[height<={h}]/bv*+ba/best"
+
+
+def download(
+    source: str, workdir: Path | None = None, max_height: int | None = None
+) -> tuple[Path, dict]:
     """Siapkan video sumber.
 
     Returns (path_video, metadata) dengan metadata berisi 'duration' dan 'source'.
@@ -86,22 +159,45 @@ def download(source: str, workdir: Path | None = None) -> tuple[Path, dict]:
         ) from exc
 
     outtmpl = str(workdir / "source.%(ext)s")
+    fmt = build_format(max_height)
     opts = {
-        "format": "bv*+ba/best",
+        "format": fmt,
         "outtmpl": outtmpl,
         "merge_output_format": "mp4",
+        # Progress dicetak sendiri lewat hook di bawah supaya formatnya konsisten.
         "quiet": True,
         "no_warnings": True,
         "noprogress": True,
+        "progress_hooks": [make_progress_hook()],
         "retries": 3,
+        "fragment_retries": 5,
+        # Jangan menggantung diam-diam: koneksi yang macet harus gagal dengan pesan.
+        "socket_timeout": 30,
         # Jangan kirim cookies/browser
         "cookiefile": None,
     }
-    with yt_dlp.YoutubeDL(opts) as ydl:
-        info = ydl.extract_info(source, download=True)
-        if info is None:
-            raise DownloadError(f"yt-dlp tidak mengembalikan info untuk {source}")
-        path = Path(ydl.prepare_filename(info))
+    print(f"  [unduh] mulai: {source}", flush=True)
+    print(f"  [unduh] format: {fmt}", flush=True)
+    print(
+        "  [unduh] kalau lama tidak bergerak, cek ukuran file .part di folder temp/; "
+        "tekan Ctrl+C untuk membatalkan",
+        flush=True,
+    )
+    try:
+        with yt_dlp.YoutubeDL(opts) as ydl:
+            info = ydl.extract_info(source, download=True)
+            if info is None:
+                raise DownloadError(f"yt-dlp tidak mengembalikan info untuk {source}")
+            path = Path(ydl.prepare_filename(info))
+    except DownloadError:
+        raise
+    except Exception as exc:
+        raise DownloadError(
+            f"Gagal mengunduh video dari URL ini: {exc}\n"
+            "  Penyebab yang sering: video privat/terhapus, age restriction, atau\n"
+            "  YouTube memblokir IP Colab. Coba: pakai file lokal, atau perbarui\n"
+            "  yt-dlp: !pip install -U yt-dlp"
+        ) from exc
 
     if not path.exists():
         candidates = sorted(workdir.glob("source.*"))

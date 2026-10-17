@@ -72,6 +72,7 @@ Sisanya boleh dibiarkan sesuai `.env.example`:
 | `MAX_CLIPS` | `5` | jumlah klip maksimal per video |
 | `LANGUAGE` | `id` | kode bahasa, atau `auto` |
 | `FACE_TRACKING` | `false` | `true` = crop mengikuti wajah, `false` = crop tengah |
+| `MAX_SOURCE_HEIGHT` | `1080` | batas tinggi video yang diunduh (`0` = tanpa batas). Hasil akhir 1080x1920, jadi 720/1080 sudah cukup dan jauh lebih cepat |
 
 > ⚠️ **Program menolak jalan** kalau `OPENROUTER_API_KEY`/`OPENROUTER_MODEL` masih
 > placeholder, atau kalau `OPENROUTER_MODEL` tidak berakhiran `:free`. Ini disengaja agar
@@ -151,6 +152,12 @@ Program berhenti dengan kode berikut:
 
 Pesan yang sering muncul:
 
+- **Unduhan lama terasa "macet"** → bukan macet, cek file `.part` di `temp/`; unduhan
+  sedang jalan. Progress (persentase, kecepatan, ETA) dicetak sebagai
+  `[unduh] xx.x% 12.3 MB/50.0 MB …`. Kalau video 4K, unduhannya memang besar: turunkan
+  `MAX_SOURCE_HEIGHT=720` di `.env`.
+- **HTTP 403 saat unduh dari YouTube** → IP Colab diblokir. Coba file lokal, atau
+  `!pip install -U yt-dlp`, atau coba lagi beberapa saat lagi.
 - **HTTP 429 dari OpenRouter** → kuota model gratis habis (lihat bagian 7). Program sudah
   mencoba retry otomatis dengan jedaincreasing.
 - **`Transkripsi kosong`** → audio sunyi, format rusak, atau `LANGUAGE` salah. Coba `--language auto`.
@@ -223,8 +230,8 @@ autoclip/
 └── output/                 HASIL AKHIR
 ```
 
-Jurnal pengembangan: `AGENTS.md` (aturan kerja), `problem.md` (12 masalah + status),
-`fix.md` (12 perbaikan + hasil uji).
+Jurnal pengembangan: `AGENTS.md` (aturan kerja), `problem.md` (13 masalah + status),
+`fix.md` (13 perbaikan + hasil uji).
 
 ---
 

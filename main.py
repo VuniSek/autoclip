@@ -126,7 +126,10 @@ def process_one(
 
     # --- 1. Ambil video + ekstrak audio ---
     log_step(1, 5, "Mengambil video & mengekstrak audio")
-    video_path, meta = downloader.download(source)
+    if downloader.is_url(source):
+        log("  (unduhan dari URL: progress, kecepatan, dan ETA ditampilkan di bawah)")
+        log(f"  (batas resolusi sumber: {cfg.max_source_height}p)")
+    video_path, meta = downloader.download(source, max_height=cfg.max_source_height)
     duration = float(meta.get("duration") or 0)
     log(f"  video : {video_path}")
     log(f"  durasi: {duration:.1f}s")

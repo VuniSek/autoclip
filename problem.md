@@ -220,3 +220,34 @@
   `git@host:`) tidak boleh diubah. Jadi cara paling umum di Colab — `git clone` dari
   GitHub lalu menjalankan skrip — belum benar-benar teruji.
 - Status: FIXED (lihat `fix.md` F-012)
+
+## P-013 | unduhan video di Colab terlihat "stuck" (tanpa progress sama sekali)
+- Waktu: 2026-10-17
+- File/langkah terkait: `src/downloader.py` -> `download()` (opsi yt-dlp), terlihat di
+  langkah 1/5 "Mengambil video & mengekstrak audio"
+- Pesan error / gejala (salin apa adanya, tanpa API key):
+  ```
+  [colab] === [5/5] Pipeline ===
+  [colab] Sumber : https://www.youtube.com/watch?v=k0xC_Y_xYnw
+  AUTO CLIP - video panjang -> klip vertikal 9:16 bersubtitle
+  ### [1/5] Mengambil video & mengekstrak audio ###
+  (selama ini tidak ada output sama sekali; Colab tidak mengatur timeout)
+  ```
+  Panel file Colab saat itu:
+  ```
+  temp/
+   - source.f616.mp4.part      <- unduhan BERJALAN (bukan macet)
+   - source.f616.mp4.ytdl
+  ```
+- Temuan tambahan: file `temp/source.f616.mp4.part` **bergerak**,
+  jadi unduhan berjalan; penyebab utamanya `format: "bv*+ba/best"` memilih video 4K
+  (679 MB untuk "Big Buck Bunny") padahal hasil akhir hanya 1080x1920, sehingga lama
+  sekali tanpa output.
+- Dugaan penyebab: (a) `opts` yt-dlp menyalakan `"quiet": True`, `"no_warnings": True`,
+  dan `"noprogress": True`, sehingga baris progress (persentase, kecepatan, ETA) yang
+  semula dicetak yt-dlp ke stdout tidak pernah terlihat; (b) `main.py` tidak mencetak
+  apa pun di langkah 1 selama menunggu, jadi tidak ada tanda hidup; (c) tidak ada
+  `socket_timeout`, jadi koneksi yang macet tidak pernah gagal dengan pesan jelas;
+  (d) `format` tanpa batas tinggi memilih varian 4K.
+  Efeknya: proses yang sebenarnya sedang bekerja terlihat menggantung.
+- Status: FIXED (lihat `fix.md` F-013)

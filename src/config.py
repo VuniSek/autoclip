@@ -85,6 +85,7 @@ class Config:
     max_clips: int
     language: str
     face_tracking: bool
+    max_source_height: int
 
     @property
     def model_slug(self) -> str:
@@ -106,6 +107,7 @@ class Config:
             "MAX_CLIPS": self.max_clips,
             "LANGUAGE": self.language,
             "FACE_TRACKING": self.face_tracking,
+            "MAX_SOURCE_HEIGHT": self.max_source_height,
         }
 
 
@@ -145,6 +147,11 @@ def _validate(cfg: Config) -> Config:
         )
     if cfg.max_clips < 1:
         raise ConfigError("MAX_CLIPS harus >= 1.")
+    if cfg.max_source_height != 0 and cfg.max_source_height < 360:
+        raise ConfigError(
+            "MAX_SOURCE_HEIGHT harus >= 360 (hasil akhir klip 1080x1920, "
+            "jadi 720/1080 sudah cukup), atau 0 untuk tanpa batas."
+        )
 
     return cfg
 
@@ -175,5 +182,6 @@ def load_config(env_path: str | Path | None = None) -> Config:
         max_clips=_parse_int(os.getenv("MAX_CLIPS"), "MAX_CLIPS", 5),
         language=os.getenv("LANGUAGE", "id") or "id",
         face_tracking=_parse_bool(os.getenv("FACE_TRACKING"), "FACE_TRACKING"),
+max_source_height=_parse_int(os.getenv("MAX_SOURCE_HEIGHT"), "MAX_SOURCE_HEIGHT", 1080),
     )
     return _validate(cfg)
