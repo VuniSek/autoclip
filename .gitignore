@@ -1,0 +1,19 @@
+# Rahasia
+.env
+
+# Output & cache
+output/
+temp/
+autoclip_output_*.zip
+input/*
+!input/.gitkeep
+
+# Python
+venv/
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+
+# Tool
+.DS_Store
