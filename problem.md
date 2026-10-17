@@ -251,3 +251,66 @@
   (d) `format` tanpa batas tinggi memilih varian 4K.
   Efeknya: proses yang sebenarnya sedang bekerja terlihat menggantung.
 - Status: FIXED (lihat `fix.md` F-013)
+
+## P-014 | progress unduhan terlalu sering dicetak (1 baris tiap ~2 detik)
+- Waktu: 2026-10-17
+- File/langkah terkait: `src/downloader.py` -> `make_progress_hook()` + `PROGRESS_INTERVAL`,
+  terlihat di langkah 1/5 "Mengambil video & mengekstrak audio" (Colab)
+- Pesan error / gejala (salin apa adanya, tanpa API key):
+  ```
+    [unduh] 81.0%  1.1 GB/1.3 GB  6.3 MB/s  ETA 42s
+    [unduh] 82.1%  1.1 GB/1.3 GB  7.2 MB/s  ETA 38s
+    [unduh] 83.2%  1.1 GB/1.3 GB  7.9 MB/s  ETA 33s
+    [unduh] 84.1%  1.1 GB/1.3 GB  7.2 MB/s  ETA 32s
+    ... (17 baris dalam ~30 detik, naik ~1,1% per baris)
+    [unduh] 97.3%  1.3 GB/1.3 GB  6.6 MB/s  ETA 8s
+  ```
+  Keluhan pengguna: "tidak perlu terlalu banyak progres yang keluar".
+- Dugaan penyebab: F-013 membuat progress dicetak setiap `PROGRESS_INTERVAL = 2.0` detik
+  agar unduhan tidak terlihat "stuck" (P-013). Nilai 2 detik terlalu rapat untuk file besar:
+  video 1,3 GB dengan kecepatan ~7 MB/s menghasilkan ~20 baris per menit, jadi output
+  Colab jadi penuh dan sulit dibaca. Tidak ada pengaturan apa pun untuk frekuensi ini.
+- Status: FIXED (lihat `fix.md` F-014)
+
+## P-015 | transkripsi di Colab gagal: `libcublas.so.12 is not found` (GPU tidak bisa dipakai)
+- Waktu: 2026-10-17
+- File/langkah terkait: `src/transcriber.py` -> `transcribe()` (loop `for seg in segments_iter`),
+  `_resolve_device()`; `autoclip_colab.py` -> `ctranslate2_sees_cuda()` / `run_pipeline_robust()`;
+  terlihat di langkah 2/5 "Transkripsi dengan faster-whisper" (Colab, GPU aktif)
+- Pesan error / gejala (salin apa adanya, tanpa API key):
+  ```
+  === [2/5] Transkripsi dengan faster-whisper ===
+  [transcribe] device=cuda compute_type=float16 model=small
+  [transcribe] shim av.open terpasang (av 19.0.1)
+  Warning: You are sending unauthenticated requests to the HF Hub. ...
+  [ERROR TIDAK TERDUKUR] Library libcublas.so.12 is not found or cannot be loaded
+  Traceback (most recent call last):
+    File "/content/autoclip/main.py", line 235, in main
+      all_outputs.extend(process_one(src, cfg, args, index=i))
+    File "/content/autoclip/main.py", line 148, in process_one
+      transcript = transcriber.transcribe(
+    File "/content/autoclip/src/transcriber.py", line 150, in transcribe
+      for seg in segments_iter:  # generator, bisa lambat
+    File "/usr/local/lib/python3.13/dist-packages/faster_whisper/transcribe.py", line 1851, in restore_speech_timestamps
+      for segment in segments:
+    File "/usr/local/lib/python3.13/dist-packages/faster_whisper/transcribe.py", line 1190, in generate_segments
+      encoder_output = self.encode(segment)
+    File "/usr/local/lib/python3.13/dist-packages/faster_whisper/transcribe.py", line 1400, in encode
+      return self.model.encode(features, to_cpu=to_cpu)
+  RuntimeError: Library libcublas.so.12 is not found or cannot be loaded
+  ```
+- Dugaan penyebab (4 lapis, semuanya perlu ditutup):
+  1. `for seg in segments_iter` tidak dibungkus try/except, padahal `model.transcribe()`
+     mengembalikan generator yang baru benar-benar berjalan saat diiterasi. Galat
+     pustaka CUDA muncul di sana, jadi tidak pernah jadi `TranscriptionError`.
+  2. Akibat (1), `main.py` jatuh ke catch-all -> `[ERROR TIDAK TERDUKUR]` dan kode
+     keluar **1**, padahal fallback CPU di `run_pipeline_robust()` hanya memicu
+     kode keluar **4**. Jadi retry CPU tidak pernah terjadi.
+  3. `_resolve_device("auto")` hanya mengecek `ctranslate2.get_cuda_device_count() > 0`.
+     Fungsi itu tetap mengembalikan 1 walau cuBLAS/torch tidak bisa dimuat, jadi
+     program tetap memilih `cuda` lalu crash. `ctranslate2_sees_cuda()` di
+     `autoclip_colab.py` punya masalah sama: ia melaporkan "GPU dipakai" padahal
+     pustakanya belum termuat.
+  4. Tidak ada fallback di dalam `transcribe()`: sekali salah pilih perangkat, proses
+     mati total walaupun CPU (int8) selalu bisa jalan.
+- Status: FIXED (lihat `fix.md` F-015)

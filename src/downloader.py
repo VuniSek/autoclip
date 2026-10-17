@@ -14,8 +14,13 @@ from .config import INPUT_DIR, TEMP_DIR
 VIDEO_EXTENSIONS = {".mp4", ".mkv", ".webm", ".mov", ".avi", ".m4v", ".flv", ".ts"}
 URL_RE = re.compile(r"^(https?://|www\.)", re.IGNORECASE)
 
-# Jarak waktu minimal antara dua baris progress (detik).
-PROGRESS_INTERVAL = 2.0
+# Batas atas frekuensi baris progress unduhan.
+# Sadari bahwa baris dicetak kalau salah satu terpenuhi: >= PROGRESS_INTERVAL detik
+# sejak baris terakhir, ATAU persentase naik >= PROGRESS_STEP poin. Yang kedua ini
+# menjaga unduhan kecil tetap terlihat bergerak tanpa menunggu interval penuh,
+# sedangkan yang pertama menjaga file besar tidak membanjiri output (P-014).
+PROGRESS_INTERVAL = 15.0
+PROGRESS_STEP = 10.0
 
 
 class DownloadError(RuntimeError):
@@ -63,13 +68,19 @@ def _human_size(num_bytes: float) -> str:
     return f"{num_bytes:.1f} GB"
 
 
-def make_progress_hook(every: float = PROGRESS_INTERVAL):
+def make_progress_hook(every: float = PROGRESS_INTERVAL, step: float = PROGRESS_STEP):
     """Hook progress yt-dlp -> cetak persentase/kecepatan/ETA ke stdout.
 
     Wajib karena opts memakai `noprogress=True`; tanpa hook ini proses unduhan
     terlihat menggantung sama sekali di Colab (lihat problem.md P-013).
+
+    `every` = jarak waktu minimal antar baris (detik), `step` = kenaikan persen
+    minimal yang tetap memaksa cetak. Salah satu saja terpenuhi -> baris dicetak,
+    supaya baris pertama dan yang terakhir selalu muncul namun file besar tidak
+    menghasilkan puluhan baris per menit (lihat problem.md P-014).
+    `every <= 0` mematikan gate waktu, jadi hanya kenaikan persentase yang dicetak.
     """
-    last = {"t": 0.0, "first": True}
+    last = {"t": 0.0, "first": True, "pct": -1.0}
 
     def hook(d: dict) -> None:
         status = d.get("status")
@@ -79,21 +90,26 @@ def make_progress_hook(every: float = PROGRESS_INTERVAL):
             total = float(d.get("total_bytes") or d.get("total_bytes_estimate") or 0)
             speed = float(d.get("speed") or 0)
             eta = d.get("eta")
-            if last["first"] or now - last["t"] >= every:
-                last["first"] = False
-                last["t"] = now
-                if total > 0:
-                    pct = f"{min(100.0, got / total * 100):5.1f}%"
-                    size = f"{_human_size(got)}/{_human_size(total)}"
-                else:
-                    pct = "   ?  "
-                    size = f"{_human_size(got)}/-"
-                speed_txt = f"{_human_size(speed)}/s" if speed else "   ?/s"
-                eta_txt = f"{int(eta)}s" if eta is not None else "  ?s"
-                print(
-                    f"  [unduh] {pct}  {size}  {speed_txt}  ETA {eta_txt}",
-                    flush=True,
-                )
+            pct_value = (min(100.0, got / total * 100) if total > 0 else None)
+            due_time = last["first"] or (every > 0 and now - last["t"] >= every)
+            due_step = pct_value is not None and pct_value - last["pct"] >= step
+            if not (due_time or due_step):
+                return
+            last["first"] = False
+            last["t"] = now
+            if pct_value is not None:
+                last["pct"] = pct_value
+                pct = f"{pct_value:5.1f}%"
+                size = f"{_human_size(got)}/{_human_size(total)}"
+            else:
+                pct = "   ?  "
+                size = f"{_human_size(got)}/-"
+            speed_txt = f"{_human_size(speed)}/s" if speed else "   ?/s"
+            eta_txt = f"{int(eta)}s" if eta is not None else "  ?s"
+            print(
+                f"  [unduh] {pct}  {size}  {speed_txt}  ETA {eta_txt}",
+                flush=True,
+            )
         elif status == "finished":
             filename = d.get("filename") or ""
             try:
@@ -123,7 +139,10 @@ def build_format(max_height: int | None = None) -> str:
 
 
 def download(
-    source: str, workdir: Path | None = None, max_height: int | None = None
+    source: str,
+    workdir: Path | None = None,
+    max_height: int | None = None,
+    progress_seconds: float | None = None,
 ) -> tuple[Path, dict]:
     """Siapkan video sumber.
 
@@ -160,6 +179,7 @@ def download(
 
     outtmpl = str(workdir / "source.%(ext)s")
     fmt = build_format(max_height)
+    every = PROGRESS_INTERVAL if progress_seconds is None else float(progress_seconds)
     opts = {
         "format": fmt,
         "outtmpl": outtmpl,
@@ -168,7 +188,7 @@ def download(
         "quiet": True,
         "no_warnings": True,
         "noprogress": True,
-        "progress_hooks": [make_progress_hook()],
+        "progress_hooks": [make_progress_hook(every=every)],
         "retries": 3,
         "fragment_retries": 5,
         # Jangan menggantung diam-diam: koneksi yang macet harus gagal dengan pesan.
@@ -178,6 +198,11 @@ def download(
     }
     print(f"  [unduh] mulai: {source}", flush=True)
     print(f"  [unduh] format: {fmt}", flush=True)
+    print(
+        f"  [unduh] progress: max 1 baris tiap {every:g} detik "
+        "(atau tiap 10% kalau lebih cepat)",
+        flush=True,
+    )
     print(
         "  [unduh] kalau lama tidak bergerak, cek ukuran file .part di folder temp/; "
         "tekan Ctrl+C untuk membatalkan",

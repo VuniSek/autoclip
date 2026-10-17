@@ -328,3 +328,85 @@
     `MAX_SOURCE_HEIGHT = 1080`.
 - Catatan: progress tidak bisa di-render di panel output statis Kolab, hanya di stream
   stdout — kalau cell di-scroll ke bawah, baris `[unduh] …` tetap ada di riwayat.
+
+## F-014 | memperbaiki P-014 (progress unduhan tidak lagi dicetak tiap 2 detik)
+- Perubahan (file dan apa yang diubah):
+  - `src/downloader.py`: `PROGRESS_INTERVAL` 2.0 -> 15.0 detik dan ditambah
+    `PROGRESS_STEP = 10.0` (persen). `make_progress_hook(every, step)` sekarang
+    mencetak baris kalau **salah satu** terpenuhi: sudah `>= every` detik sejak
+    baris terakhir, atau persentase naik `>= step` poin. Gate waktu dimatikan kalau
+    `every <= 0`. `download()` menerima parameter baru `progress_seconds` dan
+    mencetak frekuensi yang dipakai ("progress: max 1 baris tiap 15 detik").
+  - `src/config.py`: variabel baru `download_progress_seconds`
+    (`DOWNLOAD_PROGRESS_SECONDS`, default `15`), parser `_parse_float()`, validasi
+    rentang 0..3600, dan masuk ke `public_summary()`. Sekalian dirapikan indentasi
+    baris `max_source_height=` yang messed up.
+  - `main.py`: opsi `--progress-seconds` (override dari `.env`), diteruskan ke
+    `downloader.download()`.
+  - `.env.example`: baris `DOWNLOAD_PROGRESS_SECONDS=15`.
+  - `tests/test_progress.py` (baru): uji frekuensi baris dengan waktu simulasi.
+  - `README.md`: tabel opsi, tabel `.env`, dan tabel masalah menyebut ini.
+- Alasan: gate waktu saja tidak cukup untuk dua kasus yang berbeda. Video besar
+  (1,3 GB) butuh jeda panjang supaya output tidak penuh; video kecil butuh
+  progress tetap terlihat walaupun unduhannya selesai dalam hitungan detik. Karena itu
+  gate-nya ganda: waktu **atau** kenaikan persentase.
+- Hasil pengujian ulang:
+  - `tests/test_progress.py`: simulasi 100 event (1% per event, tiap 2 detik,
+    total 1,3 GB) -> `every=2` (**perilaku lama**) 100 baris, `every=15` (default)
+    **13 baris**, `every=60` 10 baris; `every=0` tepat 10 baris (tiap 10%);
+    file kecil 8 MB (12,5% per event) tetap 8 baris; kasus tanpa `total_bytes`
+    tidak crash. Semua pemeriksaan lulus.
+  - Unduhan nyata `trailer_480p.mov` (10,5 MB): `every=2` -> 5 baris progress,
+    `every=15` -> 4 baris, keduanya menampilkan 0% sampai 100% lalu
+    "selesai: source.mov (10.5 MB)".
+  - Alur penuh `main.py` dengan file lokal + mock OpenRouter dan
+    `--progress-seconds 30 --verbose`: **2 klip** 1080x1920 + subtitle, `temp/`
+    dibersihkan, tidak ada galat.
+  - Validasi config: `DOWNLOAD_PROGRESS_SECONDS=-5` ditolak dengan pesan jelas;
+    `abc` ditolak oleh `_parse_float`.
+  - `tests/test_highlight.py` tetap **7/7 lulus**.
+
+## F-015 | memperbaiki P-015 (GPU tanpa pustaka CUDA: fallback CPU, pesan jelas)
+- Perubahan (file dan apa yang diubah):
+  - `src/transcriber.py`:
+    - Konstanta `CUDA_LIBS = ("libcublas.so.12", "libcudnn.so.9")` dan
+      `missing_cuda_libs()` yang benar-benar memuat pustaka lewat `ctypes.CDLL`,
+      serta `_is_cuda_error()` untuk mengenali galat pustaka/CUDA dari pesannya.
+    - `_collect_segments()`: iterasi generator dipisah dari `model.transcribe()`.
+    - `_transcribe_once()`: pembungkus try/except untuk pemanggilan **dan** iterasi.
+      Urutan penanganan: (1) galat `vad_filter` -> ulangi tanpa vad seperti
+      sebelumnya; (2) galat CUDA saat `device=cuda` -> muat ulang model di
+      `cpu/int8` lalu transkripsi ulang **hanya** bila `WHISPER_DEVICE=auto`;
+      (3) kalau `cuda` dipaksa user -> `TranscriptionError` berisi 3 cara
+      memperbaiki (tanpa diam-diam mengganti perangkat); (4) galat lain ->
+      `TranscriptionError: Transkripsi gagal: ...`.
+    - `transcribe()`: sebelum memuat model, kalau `auto` memilih cuda tapi pustaka
+      CUDA tidak termuat, langsung turun ke `cpu/int8` dengan log jelas. `device`
+      hasil sebenarnya ikut ditulis ke `transcript.json`.
+  - `autoclip_colab.py`: `ctranslate2_sees_cuda(quiet=False)` tidak lagi hanya
+    mengecek jumlah GPU, tapi juga memuat `libcublas.so.12` + `libcudnn.so.9` lewat
+    loader. Pemeriksaan setelah `LD_LIBRARY_PATH` diset memakai `quiet=True`.
+  - `tests/test_transcribe_cuda_fallback.py` (baru): 5 skenario dengan GPU dipalsukan.
+  - `README.md`: tabel masalah menambahkan baris `libcublas.so.12`.
+- Alasan: `get_cuda_device_count()` tidak membuktikan apa pun soal pustaka —
+  ia tetap mengembalikan jumlah GPU saat cuBLAS belum termuat, jadi deteksi GPU
+  dan fallback CPU di dalam `transcribe()` tidak pernah aktif. Selain itu galat
+  ctranslate2 muncul saat generator diiterasi, di luar jangkauan try/except yang
+  lama; akibatnya program keluar dengan kode 1 (galat tak terukur) sehingga retry
+  CPU di `run_pipeline_robust()` yang hanya memicu kode 4 tidak pernah jalan.
+- Hasil pengujian ulang:
+  - `tests/test_transcribe_cuda_fallback.py` (tanpa GPU, device cuda disimulasikan):
+    kasus 1 (pustaka hilang, `auto`) -> model dimuat sekali `cpu/int8`, 2 segmen,
+    `transcript.json` ber-`device=cpu`; kasus 2 (meledak saat iterasi, `auto`) ->
+    `cuda/float16` lalu `cpu/int8`, hasil tetap 2 segmen; kasus 3 (`cuda` dipaksa) ->
+    **tidak** fallback, pesan menyebut `libcublas.so.12`, `WHISPER_DEVICE=cpu`, dan
+    `autoclip_colab.py`; kasus 4 (jalur cpu) tidak berubah; kasus 5 (galat non-CUDA,
+    `ValueError: audio rusak`) -> `Transkripsi gagal: ...`. Semua lulus.
+  - Alur penuh `main.py` dengan file lokal + mock OpenRouter: `device=cpu
+    compute_type=int8`, 23 segmen, **2 klip** 1080x1920 + subtitle, exit 0.
+  - `ctranslate2_sees_cuda()` dan `missing_cuda_libs()` di mesin tanpa GPU
+    sama-sama `False` / daftar 2 pustaka -> tidak salah pilih perangkat.
+  - `tests/test_highlight.py` **7/7 lulus**, `tests/test_progress.py` lulus,
+    `autoclip_colab.py --help` jalan.
+  - Perilaku Colab yang belum bisa diuji di mesin ini (GPU nyata): yang bisa
+    diuji hanya probe pustaka lewat `ctypes` dan simulasi galatnya.

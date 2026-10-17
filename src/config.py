@@ -72,6 +72,15 @@ def _parse_int(raw: str | None, var: str, default: int | None = None) -> int:
         raise ConfigError(f"{var} harus angka bulat, dapat '{raw}'") from exc
 
 
+def _parse_float(raw: str | None, var: str, default: float) -> float:
+    if raw is None or raw.strip() == "":
+        return default
+    try:
+        return float(raw.strip())
+    except ValueError as exc:
+        raise ConfigError(f"{var} harus angka, dapat '{raw}'") from exc
+
+
 @dataclass(frozen=True)
 class Config:
     openrouter_api_key: str
@@ -86,6 +95,7 @@ class Config:
     language: str
     face_tracking: bool
     max_source_height: int
+    download_progress_seconds: float
 
     @property
     def model_slug(self) -> str:
@@ -108,6 +118,7 @@ class Config:
             "LANGUAGE": self.language,
             "FACE_TRACKING": self.face_tracking,
             "MAX_SOURCE_HEIGHT": self.max_source_height,
+            "DOWNLOAD_PROGRESS_SECONDS": self.download_progress_seconds,
         }
 
 
@@ -152,6 +163,11 @@ def _validate(cfg: Config) -> Config:
             "MAX_SOURCE_HEIGHT harus >= 360 (hasil akhir klip 1080x1920, "
             "jadi 720/1080 sudah cukup), atau 0 untuk tanpa batas."
         )
+    if not 0 <= cfg.download_progress_seconds <= 3600:
+        raise ConfigError(
+            f"DOWNLOAD_PROGRESS_SECONDS ({cfg.download_progress_seconds:g}) harus antara "
+            "0 (hanya tampilkan tiap 10%) dan 3600."
+        )
 
     return cfg
 
@@ -182,6 +198,9 @@ def load_config(env_path: str | Path | None = None) -> Config:
         max_clips=_parse_int(os.getenv("MAX_CLIPS"), "MAX_CLIPS", 5),
         language=os.getenv("LANGUAGE", "id") or "id",
         face_tracking=_parse_bool(os.getenv("FACE_TRACKING"), "FACE_TRACKING"),
-max_source_height=_parse_int(os.getenv("MAX_SOURCE_HEIGHT"), "MAX_SOURCE_HEIGHT", 1080),
+        max_source_height=_parse_int(os.getenv("MAX_SOURCE_HEIGHT"), "MAX_SOURCE_HEIGHT", 1080),
+        download_progress_seconds=_parse_float(
+            os.getenv("DOWNLOAD_PROGRESS_SECONDS"), "DOWNLOAD_PROGRESS_SECONDS", 15.0
+        ),
     )
     return _validate(cfg)

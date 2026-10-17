@@ -87,6 +87,13 @@ def parse_args() -> argparse.Namespace:
     )
     p.add_argument("--keep-temp", action="store_true", help="Jangan hapus folder temp/")
     p.add_argument(
+        "--progress-seconds", type=float, default=None,
+        help=(
+            "Jarak minimal antar baris progress unduhan (detik, default "
+            "DOWNLOAD_PROGRESS_SECONDS=15). 0 = hanya tiap 10%."
+        ),
+    )
+    p.add_argument(
         "--env", default=None,
         help="Path file .env alternatif (default: .env di root proyek)",
     )
@@ -129,7 +136,15 @@ def process_one(
     if downloader.is_url(source):
         log("  (unduhan dari URL: progress, kecepatan, dan ETA ditampilkan di bawah)")
         log(f"  (batas resolusi sumber: {cfg.max_source_height}p)")
-    video_path, meta = downloader.download(source, max_height=cfg.max_source_height)
+    progress_seconds = (
+        args.progress_seconds if args.progress_seconds is not None
+        else cfg.download_progress_seconds
+    )
+    video_path, meta = downloader.download(
+        source,
+        max_height=cfg.max_source_height,
+        progress_seconds=progress_seconds,
+    )
     duration = float(meta.get("duration") or 0)
     log(f"  video : {video_path}")
     log(f"  durasi: {duration:.1f}s")

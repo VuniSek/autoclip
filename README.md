@@ -57,6 +57,7 @@ Sisanya biarkan default dari `.env.example` (sudah cocok untuk kebanyakan kasus)
 | `LANGUAGE` | `id` | video berbahasa lain (`en`, atau `auto`) |
 | `FACE_TRACKING` | `false` | `true` = crop ikut wajah, `false` = crop tengah |
 | `MAX_SOURCE_HEIGHT` | `1080` | turunkan ke `720` supaya unduhan jauh lebih cepat |
+| `DOWNLOAD_PROGRESS_SECONDS` | `15` | jarak antar baris progress unduhan; `0` = hanya tiap 10% |
 
 ### Langkah 4 — Jalankan
 
@@ -90,6 +91,7 @@ output/
 | `--language KODE` | `id`, `en`, atau `auto` |
 | `--face-tracking` / `--no-face-tracking` | crop ikut wajah / crop tengah |
 | `--reuse-transcript` | pakai `temp/transcript.json`, lewati transkripsi (hemat waktu) |
+| `--progress-seconds N` | jarak antar baris progress unduhan (default 15 detik, `0` = hanya tiap 10%) |
 | `--keep-temp` | jangan bersihkan `temp/` |
 | `--verbose` | tampilkan konfigurasi (API key dimasker) |
 
@@ -124,8 +126,10 @@ venv/bin/python main.py \
 | Gejala | Yang harus dilakukan |
 |---|---|
 | Unduhan lama "macet" | Bukan macet — cek file `.part` di `temp/`, unduhan sedang jalan |
+| Progress unduhan terlalu jarang/terlalu sering | atur `DOWNLOAD_PROGRESS_SECONDS` di `.env` atau pakai `--progress-seconds N` |
 | `HTTP 403` dari YouTube | IP diblokir; pakai file lokal, atau `venv/bin/pip install -U yt-dlp`, atau coba lagi nanti |
 | `HTTP 429` dari OpenRouter | Kuota model gratis habis; tunggu, ganti model `:free`, atau pakai akun yang pernah beli kredit |
+| `libcublas.so.12 is not found` | GPU tidak bisa dipakai. Otomatis turun ke CPU; kalau `WHISPER_DEVICE=cuda` dipaksa, ubah ke `cpu` + `int8`, atau jalankan lewat `autoclip_colab.py` |
 | `Transkripsi kosong` | Coba `--language auto` |
 | Wajah tidak terdeteksi | Otomatis fallback ke crop tengah, jadi aman |
 

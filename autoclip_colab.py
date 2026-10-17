@@ -375,15 +375,48 @@ def nvidia_lib_dirs() -> list[Path]:
     return dirs
 
 
-def ctranslate2_sees_cuda() -> bool:
-    """True kalau ctranslate2 benar-benar bisa menghitung jumlah GPU."""
+def ctranslate2_sees_cuda(quiet: bool = False) -> bool:
+    """True kalau ctranslate2 benar-benar bisa menghitung di GPU.
+
+    `get_cuda_device_count()` saja tidak cukup: fungsi itu tetap mengembalikan
+    jumlah GPU walau cuBLAS/torch tidak bisa dimuat, sehingga wrapper pernah
+    melaporkan "GPU dipakai" lalu pipeline crash dengan
+    `libcublas.so.12 is not found` (lihat problem.md P-015). Karena itu pustaka
+    yang dibutuhkan ctranslate2 ikut dicek lewat loader.
+    """
+    probe = (
+        "import ctranslate2 as ct, ctypes;"
+        "n = ct.get_cuda_device_count();"
+        "loaded = [];"
+        "\nfor lib in ('libcublas.so.12', 'libcudnn.so.9'):\n"
+        "    try:\n"
+        "        ctypes.CDLL(lib); loaded.append(lib)\n"
+        "    except OSError:\n"
+        "        pass\n"
+        "print(n, len(loaded))"
+    )
     proc = subprocess.run(
-        [sys.executable, "-c",
-         "import ctranslate2 as ct; print(ct.get_cuda_device_count())"],
+        [sys.executable, "-c", probe],
         capture_output=True, text=True,
     )
-    out = proc.stdout.strip()
-    return proc.returncode == 0 and out.isdigit() and int(out) > 0
+    parts = proc.stdout.split()
+    if proc.returncode != 0 or len(parts) < 2:
+        return False
+    try:
+        count, libs = int(parts[0]), int(parts[1])
+    except ValueError:
+        return False
+    if count <= 0:
+        return False
+    if libs < 2:
+        if not quiet:
+            warn(
+                "GPU terdeteksi tapi pustaka CUDA belum termuat -> memasang "
+                "nvidia-cublas-cu12 dan nvidia-cudnn-cu12 (bisa memakan waktu "
+                "beberapa menit)."
+            )
+        return False
+    return True
 
 
 def setup_cuda_libs() -> bool:
@@ -417,7 +450,7 @@ def setup_cuda_libs() -> bool:
     if have("ldconfig"):  # re-link .so baru supaya langsung ditemukan
         subprocess.run(["ldconfig"], capture_output=True, text=True)
 
-    if ctranslate2_sees_cuda():
+    if ctranslate2_sees_cuda(quiet=True):
         log("ctranslate2 OK: GPU dipakai (device=cuda, compute=float16).")
         return True
 
