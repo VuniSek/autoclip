@@ -145,6 +145,7 @@ Opsi berguna:
 | `--face-tracking` / `--no-face-tracking` | paksa ikut wajah / crop tengah |
 | `--reuse-transcript` | pakai `temp/transcript.json`, lewati transkripsi (hemat waktu) |
 | `--keep-temp` | jangan bersihkan `temp/` |
+| `--cookies PATH` | kirim `cookies.txt` ke yt-dlp (hanya kalau YouTube minta verifikasi bot, P-016) |
 | `--env PATH` | pakai file .env lain (dipakai pengujian) |
 | `--verbose` | tampilkan konfigurasi (API key dimasker) |
 

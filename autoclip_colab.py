@@ -733,6 +733,15 @@ def report(code: int, output_dir: Path, started: float) -> int:
     log(f"Kode keluar main.py : {code} ({EXIT_MEANINGS.get(code, 'tidak dikenal')})")
     log(f"Jumlah hasil        : {len(files)} file di {output_dir}")
     log(f"Waktu               : {time.time() - started:.0f} detik")
+    if code == 4:
+        log("")
+        log("Kalau pesan errornya 'Sign in to confirm you're not a bot', itu reputasi IP")
+        log("Colab yang sedang diblokir, bukan file rusak. Yang bisa dilakukan:")
+        log("  1) pakai file lokal: taruh video di /content/input/ lalu --input input/nama.mp4;")
+        log("  2) kirim cookie YouTube: -- --cookies cookies.txt (export pakai extension");
+        log("     'Get cookies.txt LOCALLY');")
+        log("  3) runtime baru (Execution > Restart runtime) lalu ulangi URL yang sama;")
+        log("  4) kalau tetap ditolak, tunggu beberapa jam atau ganti jaringan.")
     if code == 5:
         log("")
         log("Model gratis OpenRouter sering kena rate limit. Cara mengatasi:")

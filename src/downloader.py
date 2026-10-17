@@ -125,10 +125,81 @@ def make_progress_hook(every: float = PROGRESS_INTERVAL, step: float = PROGRESS_
     return hook
 
 
+# Player client yang dicoba otomatis saat YouTube menuntut verifikasi bot.
+# Client ini tidak butuh login, jadi sering lolos dari "Sign in to confirm you're
+# not a bot" (lihat problem.md P-016).
+BOT_CHECK_FALLBACK_CLIENTS = ("tv", "ios")
+
+
+class BotCheckError(DownloadError):
+    """YouTube meminta verifikasi bot: masalah reputasi IP, bukan kode."""
+
+
+BOT_CHECK_MARKERS = (
+    "sign in to confirm",
+    "confirm you're not a bot",
+    "confirm you’re not a bot",
+    "not a bot",
+    "failed to extract any player response",
+)
+
+
+def looks_like_bot_check(message: str) -> bool:
+    """True kalau pesan galat yt-dlp menandakan blokir bot dari YouTube."""
+    msg = (message or "").lower()
+    return any(marker in msg for marker in BOT_CHECK_MARKERS)
+
+
+def bot_check_help(source: str, cookies: str | Path | None = None) -> str:
+    """Petunjuk yang bisa dilakukan pengguna saat YouTube menolak IP (P-016)."""
+    lines = [
+        "YouTube menolak IP ini dengan verifikasi bot "
+        "('Sign in to confirm you're not a bot').",
+        "Ini bukan bug program dan bukan tanda videonya rusak: reputasi IP Colab",
+        "sering sudah diblokir, dan terus mengulang request hanya memperburuk.",
+        "",
+        "Yang bisa dilakukan:",
+    ]
+    if cookies:
+        lines.append(
+            f"  - Cookie sudah dipakai ({cookies}) tapi tetap ditolak -> IP memang diblokir."
+        )
+    else:
+        lines += [
+            "  - Kirim cookie YouTube (butuh akun, export pakai extension "
+            "'Get cookies.txt LOCALLY'):",
+            "      venv/bin/python main.py --input <URL> --cookies cookies.txt",
+            "    atau isi YT_COOKIES_FILE=cookies.txt di .env",
+            "    (opsional juga: pip install yt-dlp && yt-dlp --cookies-from-browser <browser>)",
+        ]
+    lines += [
+        "  - Pakai file lokal: unduh videonya di browser, taruh di folder input/,",
+        "    lalu jalankan: venv/bin/python main.py --input input/video.mp4",
+        "  - Perbarui yt-dlp: venv/bin/pip install -U yt-dlp",
+        "  - Tunggu beberapa jam / ganti jaringan, lalu coba lagi URL yang sama.",
+    ]
+    return "\n".join(lines)
+
+
+def resolve_cookies(cookies: str | Path | None) -> Path | None:
+    """Validasi path file cookies.txt (dari CLI atau .env) sebelum dipakai yt-dlp."""
+    if not cookies:
+        return None
+    path = Path(str(cookies)).expanduser()
+    if not path.exists():
+        raise DownloadError(
+            f"File cookies tidak ditemukan: {path}\n"
+            "  Export cookie YouTube lebih dulu, atau kosongkan YT_COOKIES_FILE di .env."
+        )
+    if not path.is_file():
+        raise DownloadError(f"Path cookies bukan file: {path}")
+    return path.resolve()
+
+
 def build_format(max_height: int | None = None) -> str:
     """Pilih format dengan batas tinggi agar unduhan tidak rechazar file 4K raksasa.
 
-    Tanpa batas, `best` bisa memilih video 4K ( hundreds MB ) padahal hasil akhir
+    Tanpa batas, `best` bisa memilih video 4K ( ratusan MB ) padahal hasil akhir
     hanya 1080x1920 - unduhan jadi sangat lama tanpa ada yang kelihatan bergerak
     (lihat problem.md P-013).
     """
@@ -138,11 +209,23 @@ def build_format(max_height: int | None = None) -> str:
     return f"bv*[height<={h}]+ba/b[height<={h}]/bv*+ba/best"
 
 
+def build_extractor_args(player_client: str | list[str] | tuple[str, ...] | None):
+    """`extractor_args` untuk memaksa player client tertentu (opsional)."""
+    if not player_client:
+        return {}
+    clients = [player_client] if isinstance(player_client, str) else list(player_client)
+    joined = ",".join(c.strip() for c in clients if str(c).strip())
+    return {"youtube": ["player_client=" + joined]} if joined else {}
+
+
 def download(
     source: str,
     workdir: Path | None = None,
     max_height: int | None = None,
     progress_seconds: float | None = None,
+    cookies_file: str | Path | None = None,
+    cookies_from_browser: str | None = None,
+    player_client: str | None = None,
 ) -> tuple[Path, dict]:
     """Siapkan video sumber.
 
@@ -180,6 +263,14 @@ def download(
     outtmpl = str(workdir / "source.%(ext)s")
     fmt = build_format(max_height)
     every = PROGRESS_INTERVAL if progress_seconds is None else float(progress_seconds)
+    cookie_path = resolve_cookies(cookies_file)
+    cookie_opts: dict[str, object] = {}
+    if cookie_path:
+        cookie_opts["cookiefile"] = str(cookie_path)
+    browser = (cookies_from_browser or "").strip()
+    if browser:
+        cookie_opts["cookiesfrombrowser"] = browser
+    extractor_opts = build_extractor_args(player_client)
     opts = {
         "format": fmt,
         "outtmpl": outtmpl,
@@ -193,11 +284,19 @@ def download(
         "fragment_retries": 5,
         # Jangan menggantung diam-diam: koneksi yang macet harus gagal dengan pesan.
         "socket_timeout": 30,
-        # Jangan kirim cookies/browser
+        # Default: jangan kirim cookie apa pun. Cookie hanya dipakai kalau diminta.
         "cookiefile": None,
+        **cookie_opts,
     }
+    # yt-dlp membaca player client dari opts["extractor_args"]["youtube"], BUKAN
+    # dari key top-level "youtube".
+    if extractor_opts:
+        opts["extractor_args"] = extractor_opts
     print(f"  [unduh] mulai: {source}", flush=True)
     print(f"  [unduh] format: {fmt}", flush=True)
+    if cookie_opts:
+        detail = cookie_opts.get("cookiefile") or f"browser={cookie_opts['cookiesfrombrowser']}"
+        print(f"  [unduh] cookie: {detail}", flush=True)
     print(
         f"  [unduh] progress: max 1 baris tiap {every:g} detik "
         "(atau tiap 10% kalau lebih cepat)",
@@ -208,21 +307,46 @@ def download(
         "tekan Ctrl+C untuk membatalkan",
         flush=True,
     )
-    try:
-        with yt_dlp.YoutubeDL(opts) as ydl:
+
+    def fetch(current_opts: dict) -> tuple[dict, Path]:
+        with yt_dlp.YoutubeDL(current_opts) as ydl:
             info = ydl.extract_info(source, download=True)
             if info is None:
                 raise DownloadError(f"yt-dlp tidak mengembalikan info untuk {source}")
-            path = Path(ydl.prepare_filename(info))
+            return info, Path(ydl.prepare_filename(info))
+
+    try:
+        info, path = fetch(opts)
     except DownloadError:
         raise
     except Exception as exc:
-        raise DownloadError(
-            f"Gagal mengunduh video dari URL ini: {exc}\n"
-            "  Penyebab yang sering: video privat/terhapus, age restriction, atau\n"
-            "  YouTube memblokir IP Colab. Coba: pakai file lokal, atau perbarui\n"
-            "  yt-dlp: !pip install -U yt-dlp"
-        ) from exc
+        if not looks_like_bot_check(f"{type(exc).__name__}: {exc}"):
+            raise DownloadError(
+                f"Gagal mengunduh video dari URL ini: {exc}\n"
+                "  Penyebab yang sering: video privat/terhapus, age restriction, atau\n"
+                "  YouTube memblokir IP Colab. Coba: pakai file lokal, atau perbarui\n"
+                "  yt-dlp: !pip install -U yt-dlp"
+            ) from exc
+
+        # Permintaan verifikasi bot: coba player client yang tidak butuh login satu
+        # kali. Kalau cookie atau player client sudah diminta, lebih baik gagal dengan
+        # pesan jelas daripada mengulang permintaan dengan cara yang sama.
+        if cookie_opts or extractor_opts:
+            raise BotCheckError(bot_check_help(source, cookie_path or cookies_file)) from exc
+
+        clients = ",".join(BOT_CHECK_FALLBACK_CLIENTS)
+        print(
+            "  [unduh] YouTube meminta verifikasi bot (IP ini ditandai).\n"
+            f"  [unduh] mencoba ulang dengan player client: {clients}",
+            flush=True,
+        )
+        retry_opts = dict(opts)
+        retry_opts["extractor_args"] = build_extractor_args(clients)
+        try:
+            info, path = fetch(retry_opts)
+            print("  [unduh] berhasil tanpa login.", flush=True)
+        except Exception as exc2:
+            raise BotCheckError(bot_check_help(source, cookies_file)) from exc2
 
     if not path.exists():
         candidates = sorted(workdir.glob("source.*"))

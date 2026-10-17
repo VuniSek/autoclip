@@ -314,3 +314,52 @@
   4. Tidak ada fallback di dalam `transcribe()`: sekali salah pilih perangkat, proses
      mati total walaupun CPU (int8) selalu bisa jalan.
 - Status: FIXED (lihat `fix.md` F-015)
+
+## P-016 | YouTube refusing download: "Sign in to confirm you're not a bot"
+- Waktu: 2026-10-17
+- File/langkah terkait: `src/downloader.py` -> `download()` (blok `except Exception`),
+  langkah 1/5 "Mengambil video & mengekstrak audio" (Colab)
+- Pesan error / gejala (salin apa adanya, tanpa API key):
+  ```
+  ERROR: [youtube] wDKyVtbdEsc: Sign in to confirm you're not a bot. Use --cookies-from-browser
+  or --cookies for the authentication. See
+  https://github.com/yt-dlp/yt-dlp/wiki/FAQ#how-do-i-pass-cookies-to-yt-dlp for how to
+  manually pass cookies. Also see
+  https://github.com/yt-dlp/yt-dlp/wiki/Extractors#exporting-youtube-cookies for tips on
+  effectively exporting YouTube cookies
+  [ERROR UNDUH/TRANSKRIPSI] Gagal mengunduh video dari URL ini: ERROR: [youtube] wDKyVtbdEsc:
+  Sign in to confirm you're not a bot. ...
+  ```
+  Keluhan pengguna: "kenapa padahal tadi gak ada" (video yang sama sebelumnya bisa diunduh).
+- Dugaan penyebab:
+  1. Ini bukan bug kode dan bukan perubahan dari F-014/F-015. YouTube menilai
+     reputasi **IP** dan frekuensi request; IP Colab sering sudah ditandai atau diblokir.
+     Video yang sebelumnya berhasil dari IP lain, atau sebelum IP kena kuota, jadi
+     sekarang ditolak. Terus mencoba video lain hanya akan memperburuk.
+  2. `opts` yt-dlp sengaja mengunci `"cookiefile": None` dan tidak pernah mengirim
+     `--cookies-from-browser`, jadi ketika YouTube meminta autentikasi tidak ada
+     jalur untuk mengirim cookie sama sekali.
+  3. Pesan galat tidak dikenali sebagai kasus khusus, sehingga pengguna hanya melihat
+     "Gagal mengunduh video dari URL ini" tanpa tahu itu masalah IP/cookie.
+- Status: FIXED (lihat `fix.md` F-016)
+- Catatan: ini masalah reputasi IP, bukan bug kode. Perbaikannya membuat program
+  mengenali kasusnya, mencoba satu jalur tanpa login, lalu berhenti dengan petunjuk
+  yang bisa dilakukan user (file lokal / cookie / tunggu / ganti jaringan).
+
+## P-017 | OpenRouter gagal memilih segmen highlight
+- Waktu: 2026-10-17 15:26
+- File/langkah terkait: langkah 3 (highlight), model=mock/test-model:free
+- Pesan error / gejala (salin apa adanya, tanpa API key):
+  ```
+  Gagal mendapatkan segmen highlight setelah 3 percobaan pada model 'mock/test-model:free'. Error terakhir: HTTPConnectionPool(host='127.0.0.1', port=8792): Max retries exceeded with url: /api/v1/chat/completions (Caused by NewConnectionError("HTTPConnection(host='127.0.0.1', port=8792): Failed to establish a new connection: [Errno 111] Connection refused"))
+  ```
+- Dugaan penyebab: Model gratis OpenRouter bisa rate limit atau membalas di luar format JSON setelah semua percobaan ulang habis.
+- Status: FIXED
+- Catatan: entri ini dihapus setelah ditinjau ulang. Semuanya adalah kesalahan
+  pengaturan pengujian, bukan masalah program: mock OpenRouter dijalankan di port
+  default `8765` sedangkan `tests/.env.test` menunjuk port `8792`
+  (`HTTPConnection refused`), dan file `temp/` sengaja dikosongkan sebelum
+  pengujian ulang P-016 sehingga `--reuse-transcript` tidak terpakai. Setelah mock
+  dijalankan di port yang benar, alur penuh sukses 2 klip. Pelajaran: cek dulu
+  apakah alamat/port pada `.env` uji cocok dengan yang dipakai skrip sebelum
+  menyimpulkan program rusak.

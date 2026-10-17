@@ -87,6 +87,13 @@ def parse_args() -> argparse.Namespace:
     )
     p.add_argument("--keep-temp", action="store_true", help="Jangan hapus folder temp/")
     p.add_argument(
+        "--cookies", default=None,
+        help=(
+            "Path file cookies.txt untuk yt-dlp, hanya perlu kalau YouTube minta "
+            "verifikasi bot ('Sign in to confirm you\'re not a bot')."
+        ),
+    )
+    p.add_argument(
         "--progress-seconds", type=float, default=None,
         help=(
             "Jarak minimal antar baris progress unduhan (detik, default "
@@ -144,6 +151,7 @@ def process_one(
         source,
         max_height=cfg.max_source_height,
         progress_seconds=progress_seconds,
+        cookies_file=args.cookies or cfg.yt_cookies_file,
     )
     duration = float(meta.get("duration") or 0)
     log(f"  video : {video_path}")
@@ -251,6 +259,13 @@ def main() -> int:
     except ConfigError as exc:
         log(f"[KONFIGURASI ERROR] {exc}")
         return 2
+    except downloader.BotCheckError as exc:
+        # Verifikasi bot YouTube: bukan bug kode dan bukan file rusak, jadi pesannya
+        # hanya berisi langkah yang bisa dilakukan user (lihat problem.md P-016).
+        # Tidak dicatat ulang ke problem.md supaya jurnal tidak penuh dengan
+        # pengulangan masalah IP yang sama.
+        log(f"[ERROR VERIFIKASI BOT] {exc}")
+        return 4
     except (downloader.DownloadError, transcriber.TranscriptionError) as exc:
         log(f"[ERROR UNDUH/TRANSKRIPSI] {exc}")
         return 4

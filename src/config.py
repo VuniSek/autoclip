@@ -96,6 +96,7 @@ class Config:
     face_tracking: bool
     max_source_height: int
     download_progress_seconds: float
+    yt_cookies_file: str
 
     @property
     def model_slug(self) -> str:
@@ -119,6 +120,7 @@ class Config:
             "FACE_TRACKING": self.face_tracking,
             "MAX_SOURCE_HEIGHT": self.max_source_height,
             "DOWNLOAD_PROGRESS_SECONDS": self.download_progress_seconds,
+            "YT_COOKIES_FILE": self.yt_cookies_file or "(kosong)",
         }
 
 
@@ -163,6 +165,11 @@ def _validate(cfg: Config) -> Config:
             "MAX_SOURCE_HEIGHT harus >= 360 (hasil akhir klip 1080x1920, "
             "jadi 720/1080 sudah cukup), atau 0 untuk tanpa batas."
         )
+    if cfg.yt_cookies_file and not Path(cfg.yt_cookies_file).expanduser().is_file():
+        raise ConfigError(
+            f"YT_COOKIES_FILE menunjuk file yang tidak ada: {cfg.yt_cookies_file}\n"
+            "  Kosongkan nilainya kalau tidak memakai cookie."
+        )
     if not 0 <= cfg.download_progress_seconds <= 3600:
         raise ConfigError(
             f"DOWNLOAD_PROGRESS_SECONDS ({cfg.download_progress_seconds:g}) harus antara "
@@ -202,5 +209,6 @@ def load_config(env_path: str | Path | None = None) -> Config:
         download_progress_seconds=_parse_float(
             os.getenv("DOWNLOAD_PROGRESS_SECONDS"), "DOWNLOAD_PROGRESS_SECONDS", 15.0
         ),
+        yt_cookies_file=(os.getenv("YT_COOKIES_FILE", "") or "").strip(),
     )
     return _validate(cfg)

@@ -410,3 +410,79 @@
     `autoclip_colab.py --help` jalan.
   - Perilaku Colab yang belum bisa diuji di mesin ini (GPU nyata): yang bisa
     diuji hanya probe pustaka lewat `ctypes` dan simulasi galatnya.
+
+## F-016 | memperbaiki P-016 (verifikasi bot YouTube)
+- Perubahan (file dan apa yang diubah):
+  - `src/downloader.py`:
+    - `BotCheckError(DownloadError)` + `BOT_CHECK_MARKERS` + `looks_like_bot_check()`
+      supaya pesan "Sign in to confirm you're not a bot" (dan variasinya, termasuk
+      "Failed to extract any player response") dikenali sebagai kasus khusus, bukan
+      galat unduhan generik. Pencocokan dilakukan pada huruf kecil, jadi kutip ASCII
+      (`'`) dan kutip miring (`'`) sama-sama kena.
+    - `BOT_CHECK_FALLBACK_CLIENTS = ("tv", "ios")` + `build_extractor_args()` +
+      parameter baru `player_client`. Percobaan ulang memakai
+      `extractor_args: {"youtube": ["player_client=tv,ios"]}` (bukan key top-level
+      `youtube`, yang diabaikan yt-dlp) karena player client TV/iOS tidak butuh login.
+    - `download()` dibungkus fungsi `fetch()` dan punya percobaan ulang **satu kali**:
+      hanya saat bot check terdeteksi, cookie belum dikirim, dan `player_client`
+      belum dipaksa. Kalau percobaan ulang gagal -> `BotCheckError`. Kalau cookie atau
+      player client sudah dikirim -> langsung `BotCheckError` tanpa mengulang
+      permintaan yang sama. Galat biasa (video privat, 429, 403) tetap
+      `DownloadError` biasa dan tidak memicu percobaan ulang.
+    - `resolve_cookies()` memvalidasi path `cookies.txt` sebelum dipakai; parameter
+      baru `cookies_file` dan `cookies_from_browser`; yang dipakai dicetak sebagai
+      `[unduh] cookie: <path>` (path saja, isi cookie tidak pernah dicetak).
+    - `bot_check_help()` menyusun pesan berisi langkah yang bisa dilakukan: unduh
+      manual ke `input/`, `--cookies cookies.txt` / `YT_COOKIES_FILE`,
+      `pip install -U yt-dlp`, tunggu/ganti jaringan; plus versi singkat kalau cookie
+      sudah dipakai (berarti IP memang diblokir).
+  - `src/config.py`: variabel baru `yt_cookies_file` (`YT_COOKIES_FILE`, default
+    kosong), masuk `public_summary()` sebagai `(kosong)`, dan divalidasi: path yang
+    ditunjuk harus benar-benar ada sebagai file, kalau tidak `ConfigError` (keluar 2).
+  - `main.py`: opsi baru `--cookies PATH` (override `.env`), diteruskan ke
+    `downloader.download()`, dan blok `except downloader.BotCheckError` (ditempatkan
+    di ATAS `except (DownloadError, TranscriptionError)` karena ia subclass-nya) yang
+    mencetak `[ERROR VERIFIKASI BOT]` lalu keluar dengan kode 4. Blok ini sengaja
+    tidak menulis entri baru ke `problem.md`: penyebabnya reputasi IP, jadi mencatat
+    lagi hanya memenuhi jurnal dengan pengulangan masalah yang sama.
+  - `tests/test_bot_check.py` (baru, 7 skenario): `yt_dlp` dipalsukan lewat
+    `sys.modules`, jadi tidak ada request ke internet sama sekali.
+  - `.env.example`: baris `YT_COOKIES_FILE=`. `README.md`: baris tabel `.env`, baris
+    tabel opsi, dan baris troubleshooting untuk `Sign in to confirm you're not a bot`.
+    `AGENTS.md`: opsi `--cookies` di tabel. `autoclip_colab.py` -> `report()`: saran
+    khusus untuk kode keluar 4 akibat verifikasi bot (file lokal, `-- --cookies
+    cookies.txt`, restart runtime, ganti jaringan).
+  - `src/transcriber.py`: dua perbaikan kalimat (typo), tanpa perubahan logika.
+  - Dua file uji yang isinya tumpang tindih (`tests/test_download_bot_check.py` dan
+    `tests/test_bot_check.py`) digabung menjadi satu `tests/test_bot_check.py`; folder
+    namesake di `temp/` ikut dibersihkan.
+- Alasan:
+  1. Dulu semua galat dibungkus satu pesan "Gagal mengunduh video dari URL ini" yang
+     menyebut kemungkinan blokir IP tanpa memberi langkah konkret, dan `opts`
+     mengunci `"cookiefile": None` sehingga tidak ada jalur cookie sama sekali
+     (duga penyebab butir 2 di P-016).
+  2. Pelajaran F-009 (kegagalan jangan ditangani diam-diam) diterapkan selaras:
+     program mencoba satu jalur yang masuk akal tanpa login, lalu berhenti dengan
+     instruksi manual — tanpa mengganti model, tanpa loop tanpa akhir.
+  3. Percobaan ulang dibatasi satu kali dan hanya untuk kasus bot check supaya tidak
+     menambah request ke IP yang sudah diblokir; mengulang justru memperburuk
+     (P-016 butir 1).
+- Hasil pengujian ulang:
+  - `tests/test_bot_check.py` **lulus** (7 skenario): 3 pesan positif + 3 negatif
+    terdeteksi benar; bot check -> percobaan ulang `player_client=tv,ios` lalu
+    berhasil (2 percobaan, metadata benar); bot check total -> `BotCheckError` 13
+    baris yang menyebut cookie, file lokal, dan reputasi IP; cookie sudah dikirim ->
+    tepat 1 percobaan, tidak ada percobaan ulang sia-sia; video privat ->
+    `DownloadError` biasa dengan 1 percobaan; `resolve_cookies()` menolak path
+    hilang dan menerima file yang ada; `build_extractor_args()` benar untuk
+    None/tv/tuple; file lokal tetap terpengaruh (durasi 2,0s, `is_url=False`).
+  - Regresi: `tests/test_highlight.py` 7/7, `tests/test_progress.py` lulus,
+    `tests/test_transcribe_cuda_fallback.py` lulus, `py_compile` semua file OK.
+  - Alur penuh `main.py` (file lokal + mock OpenRouter, `--max-clips 2 --keep-temp`):
+    23 segmen transkripsi, 2 segmen terpilih, **2 klip 1080x1920** + `.srt`/`.ass`
+    di `output/`, exit 0.
+- Catatan: yang tidak bisa dibuktikan di mesin ini adalah keadaan sebenarnya —
+    apakah IP Colab tertentu sedang diblokir dan apakah player client `tv`/`ios`
+    cukup untuk lolos. Yang diuji adalah logika keputusannya (deteksi pesan, percobaan
+    ulang sekali, lalu pesan yang bisa ditindaklanjuti), dan tidak ada satu pun
+    request nyata ke YouTube selama pengujian.

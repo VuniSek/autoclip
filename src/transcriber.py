@@ -85,7 +85,7 @@ CUDA_ERROR_MARKERS = (
 def missing_cuda_libs() -> list[str]:
     """Daftar pustaka CUDA yang tidak bisa dimuat loader (lihat problem.md P-015).
 
-    `get_cuda_device_count()` tidak cukup: ia mengembalikan jumlah GPU даже kalau
+    `get_cuda_device_count()` tidak cukup: ia mengembalikan jumlah GPU bahkan kalau
     cuBLAS belum terpasang, sehingga program memilih cuda lalu crash saat encode.
     """
     import ctypes
