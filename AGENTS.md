@@ -159,6 +159,15 @@ Kode keluar: `0` sukses, `2` konfigurasi `.env` belum lengkap **atau model bukan
 # uji modul highlight vs mock OpenRouter lokal (7 skenario)
 venv/bin/python tests/test_highlight.py
 
+# uji verifikasi bot YouTube + cookies (yt-dlp dipalsukan, tanpa internet)
+venv/bin/python tests/test_bot_check.py
+
+# uji diagnostik CUDA Colab runner (tanpa GPU, probe disimulasikan)
+venv/bin/python tests/test_cuda_diagnostics.py
+
+# diagnosis lingkungan Colab (GPU, pustaka CUDA, device di .env)
+venv/bin/python autoclip_colab.py --check-env
+
 # buat video uji 1-3 menit (butuh edge-tts)
 venv/bin/pip install edge-tts && venv/bin/python make_test_video.py
 ```

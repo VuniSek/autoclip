@@ -387,3 +387,48 @@
   Huruf ini ikut terpasang sejak F-014 (baris progress) tapi tidak ketahuan karena
   `--help` tidak pernah dijalankan setelahnya.
 - Status: FIXED (lihat `fix.md` F-018)
+
+## P-019 | Colab: GPU Tesla T4 terdeteksi tapi ctranslate2 tetap turun ke CPU
+- Waktu: 2026-10-18
+- File/langkah terkait: `autoclip_colab.py` -> `ctranslate2_sees_cuda()` + `setup_cuda_libs()`,
+  hasil akhirnya terlihat di `src/transcriber.py` -> `[transcribe] device=cpu compute_type=int8`
+  (langkah 2/5, Colab T4, `WHISPER_DEVICE=cpu` tertulis di `.env`)
+- Pesan error / gejala (salin apa adanya, tanpa API key):
+  ```
+  Successfully installed av-19.0.1 ctranslate2-4.8.3 faster-whisper-1.2.1 onnxruntime-1.31.0 yt-dlp-2026.8.19
+  [colab] GPU terdeteksi: Tesla T4, 15360 MiB
+  [colab] PERINGATAN: GPU terdeteksi tapi pustaka CUDA belum termuat -> memasang nvidia-cublas-cu12 dan nvidia-cudnn-cu12
+  [colab] Memasang pustaka CUDA untuk ctranslate2...
+  [colab] $ /usr/bin/python3 -m pip install -q --disable-pip-version-check nvidia-cublas-cu12 nvidia-cudnn-cu12==9.* nvid...
+  [colab] LD_LIBRARY_PATH diset ke 16 folder pustaka NVIDIA
+  [colab] PERINGATAN: GPU ada tapi ctranslate2 tidak bisa memakainya -> fallback ke CPU (int8).
+  [colab] Transkripsi lebih lambat, tetapi pipeline tetap jalan.
+  ```
+  Gejalanya: audio 3505 detik diproses di CPU padahal T4 tersedia, padahal
+  pustaka CUDA sudah dipasang dan `LD_LIBRARY_PATH` sudah di-set.
+- Dugaan penyebab (belum terverifikasi, perlu diagnostik di Colab):
+  1. `ctranslate2_sees_cuda()` menggabungkan tiga kemungkinan kegagalan jadi satu
+     nilai `False` tanpa alasan: `get_cuda_device_count() == 0`, `libcublas.so.12`
+     gagal dimuat, atau `libcudnn.so.9` gagal dimuat. Probe kedua dipanggil dengan
+     `quiet=True`, jadi justru saat inilah alasan sebenarnya hilang dari log.
+  2. Probe melakukan `ct.get_cuda_device_count()` **lebih dulu**; kalau panggilan itu
+     melempar (mis. `libcudart.so.12` tidak ketemu loader), seluruh probe keluar
+     non-zero dan hasilnya disamakan dengan "pustaka belum termuat".
+  3. `pip install -q` menyembunyikan apakah paket nvidia benar-benar terpasang,
+     sehingga tidak ada yang memastikan `import nvidia` di interpreter yang sedang
+     berjalan menunjuk folder yang barusan diisi pip.
+  4. `ctypes.CDLL("libcudnn.so.9")` ikut gagal kalau salah satu dependensinya
+     (mis. `libcublasLt.so.12`) tidak ada di jalur loader, meski cudnn-nya sendiri ada.
+- Perbaikan sementara (lihat `fix.md` F-019): `ctranslate2_sees_cuda()` diganti
+  `cuda_diagnostics()` + `cuda_ready()` + `explain_cuda_failure()` yang melaporkan
+  **penyebab** apa pun yang gagal (jumlah GPU, tiap pustaka + error loader, lokasi
+  paket pip), dan `install_cuda_libs()` sekarang memverifikasi hasil pip
+  (`import nvidia`) alih-alih `pip -q` yang menutupi kegagalan.
+- Cara memastikan akar masalahnya di Colab (sekali jalan, tanpa mengunduh video):
+  ```
+  !python autoclip_colab.py --check-env
+  ```
+  Baris `CUDA : siap=... device_count=...` dan daftar pustaka menunjukkan apakah
+  masalahnya "GPU tidak terlihat" atau "pustaka tidak termuat".
+- Status: OPEN (menunggu hasil `--check-env` di Colab; program sekarang sudah
+  menampilkan penyebabnya sendiri)

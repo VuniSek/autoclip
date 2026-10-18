@@ -45,6 +45,7 @@ from __future__ import annotations
 
 import argparse
 import getpass
+import json
 import os
 import shutil
 import subprocess
@@ -375,6 +376,127 @@ def nvidia_lib_dirs() -> list[Path]:
     return dirs
 
 
+CUDA_LIBS = ("libcublas.so.12", "libcudnn.so.9")
+CUDA_OPTIONAL_LIBS = ("libcudart.so.12", "libcublasLt.so.12")
+
+# Probe CUDA yang melaporkan-json apa pun yang salah, bukan cuma "gagal/tidak".
+# Probe lama (lihat problem.md P-019) mengembalikan satu nilai False untuk tiga
+# kondisi berbeda, dan pemeriksaan kedua dipanggil dengan quiet=True, jadi alasan
+# sebenarnya tidak pernah sampai ke log.
+CUDA_PROBE = r"""
+import ctypes, json, os, sys
+info = {
+    "python": sys.executable,
+    "ld_path": os.environ.get("LD_LIBRARY_PATH", ""),
+    "libs": {},
+    "errors": {},
+}
+try:
+    import ctranslate2 as ct
+    info["ctranslate2"] = getattr(ct, "__version__", "?")
+    try:
+        info["device_count"] = ct.get_cuda_device_count()
+    except Exception as exc:
+        info["device_count"] = -1
+        info["errors"]["get_cuda_device_count"] = type(exc).__name__ + ": " + str(exc)
+except Exception as exc:
+    info["errors"]["import ctranslate2"] = type(exc).__name__ + ": " + str(exc)
+for lib in %s:
+    try:
+        ctypes.CDLL(lib)
+        info["libs"][lib] = "ok"
+    except OSError as exc:
+        info["libs"][lib] = str(exc)
+try:
+    import nvidia
+    info["nvidia_dir"] = os.path.dirname(nvidia.__file__)
+except Exception as exc:
+    info["errors"]["import nvidia"] = type(exc).__name__ + ": " + str(exc)
+print(json.dumps(info))
+""" % repr(CUDA_LIBS + CUDA_OPTIONAL_LIBS)
+
+
+def cuda_diagnostics() -> dict:
+    """Kumpulkan detail GPU/pustaka CUDA dari interpreter yang akan dipakai.
+
+    Jalan sebagai subprocess supaya persis seperti kondisi main.py nanti
+    (LD_LIBRARY_PATH ikut terambil dari environment proses ini).
+    """
+    proc = subprocess.run(
+        [sys.executable, "-c", CUDA_PROBE],
+        capture_output=True, text=True,
+    )
+    for line in reversed((proc.stdout or "").strip().splitlines()):
+        line = line.strip()
+        if line.startswith("{"):
+            try:
+                return json.loads(line)
+            except json.JSONDecodeError:
+                continue
+    return {
+        "python": sys.executable,
+        "ld_path": os.environ.get("LD_LIBRARY_PATH", ""),
+        "libs": {},
+        "errors": {
+            "probe": (proc.stderr or proc.stdout or "tanpa output").strip()[-400:]
+            or f"keluar dengan kode {proc.returncode}"
+        },
+    }
+
+
+def cuda_ready(diag: dict) -> bool:
+    """True kalau ctranslate2 menghitung GPU dan pustaka wajibnya termuat."""
+    if int(diag.get("device_count") or 0) <= 0:
+        return False
+    return all(diag.get("libs", {}).get(lib) == "ok" for lib in CUDA_LIBS)
+
+
+def explain_cuda_failure(diag: dict, gpu: str) -> str:
+    """Satu blok teks yang menyebut penyebab kegagalan + cara memperbaikinya."""
+    lines: list[str] = []
+    count = diag.get("device_count")
+    if diag.get("errors", {}).get("import ctranslate2"):
+        lines.append(f"  ctranslate2 tidak bisa diimpor: {diag['errors']['import ctranslate2']}")
+    if count is None:
+        lines.append("  jumlah GPU tidak diketahui (probe gagal, lihat 'errors' di bawah).")
+    elif int(count) <= 0:
+        lines.append(
+            "  ctranslate2 melihat 0 GPU, padahal nvidia-smi melihat "
+            f"'{gpu}'. Artinya driver/pustaka CUDA tidak terbaca oleh ctranslate2."
+        )
+        lines.append(
+            "    - coba: pip install nvidia-cuda-runtime-cu12 nvidia-cublas-cu12 "
+            "'nvidia-cudnn-cu12==9.*'"
+        )
+        lines.append("    - atau restart runtime Colab, lalu ulangi --check-env")
+    broken = [
+        (lib, state)
+        for lib, state in (diag.get("libs") or {}).items()
+        if state != "ok"
+    ]
+    if broken:
+        if count is not None and int(count) > 0:
+            lines.append(
+                f"  GPU '{gpu}' terlihat oleh ctranslate2, tapi pustaka CUDA di bawah "
+                "belum bisa dimuat loader."
+            )
+        lines.append("  Pustaka yang gagal dimuat loader:")
+        for lib, state in broken:
+            prefix = f"{lib}: "
+            lines.append(f"    - {lib}: {state[len(prefix):] if state.startswith(prefix) else state}")
+    if diag.get("errors", {}).get("get_cuda_device_count"):
+        lines.append(f"  get_cuda_device_count(): {diag['errors']['get_cuda_device_count']}")
+    if diag.get("errors", {}).get("probe"):
+        lines.append(f"  probe gagal: {diag['errors']['probe']}")
+    nvidia_dir = diag.get("nvidia_dir")
+    if nvidia_dir:
+        lines.append(f"  paket nvidia terpasang di: {nvidia_dir}")
+    else:
+        lines.append("  paket pip nvidia-cublas/cudnn tidak terlihat di interpreter ini.")
+    lines.append(f"  python: {diag.get('python', '?')}")
+    return "\n".join(lines)
+
+
 def ctranslate2_sees_cuda(quiet: bool = False) -> bool:
     """True kalau ctranslate2 benar-benar bisa menghitung di GPU.
 
@@ -382,40 +504,47 @@ def ctranslate2_sees_cuda(quiet: bool = False) -> bool:
     jumlah GPU walau cuBLAS/torch tidak bisa dimuat, sehingga wrapper pernah
     melaporkan "GPU dipakai" lalu pipeline crash dengan
     `libcublas.so.12 is not found` (lihat problem.md P-015). Karena itu pustaka
-    yang dibutuhkan ctranslate2 ikut dicek lewat loader.
+    yang dibutuhkan ctranslate2 ikut dicek lewat loader. Kalau gagal dan
+    `quiet=False`, penyebab spesifiknya ikut dicetak (problem.md P-019).
     """
-    probe = (
-        "import ctranslate2 as ct, ctypes;"
-        "n = ct.get_cuda_device_count();"
-        "loaded = [];"
-        "\nfor lib in ('libcublas.so.12', 'libcudnn.so.9'):\n"
-        "    try:\n"
-        "        ctypes.CDLL(lib); loaded.append(lib)\n"
-        "    except OSError:\n"
-        "        pass\n"
-        "print(n, len(loaded))"
-    )
-    proc = subprocess.run(
-        [sys.executable, "-c", probe],
-        capture_output=True, text=True,
-    )
-    parts = proc.stdout.split()
-    if proc.returncode != 0 or len(parts) < 2:
+    diag = cuda_diagnostics()
+    if cuda_ready(diag):
+        return True
+    if not quiet:
+        warn(
+            "GPU terdeteksi tapi ctranslate2 belum siap:\n"
+            + explain_cuda_failure(diag, gpu_name() or "tidak ada")
+        )
+    return False
+
+
+def install_cuda_libs() -> bool:
+    """Pasang paket pip pustaka CUDA. Return True kalau semua benar-benar terpasang.
+
+    `pip install -q` menyembunyikan hasilnya, sehingga program tidak pernah tahu
+    apakah paketnya masuk ke interpreter yang sedang dipakai atau gagal diam-diam
+    (lihat problem.md P-019). Karena itu output-nya ditangkap dan diperiksa lewat
+    `import nvidia` + `cuda_diagnostics()`.
+    """
+    cmd = [
+        sys.executable, "-m", "pip", "install", "--disable-pip-version-check",
+        "nvidia-cublas-cu12", "nvidia-cudnn-cu12==9.*", "nvidia-cuda-runtime-cu12",
+        "nvidia-cufft-cu12", "nvidia-curand-cu12",
+    ]
+    log(f"$ {' '.join(cmd)}")
+    proc = subprocess.run(cmd, capture_output=True, text=True, timeout=3600)
+    if proc.returncode != 0:
+        tail = (proc.stderr or proc.stdout or "").strip().splitlines()[-10:]
+        warn("pip gagal memasang pustaka CUDA:\n  " + "\n  ".join(tail))
         return False
-    try:
-        count, libs = int(parts[0]), int(parts[1])
-    except ValueError:
+    diag = cuda_diagnostics()
+    if not diag.get("nvidia_dir"):
+        warn(
+            "pip selesai tapi paket `nvidia` tidak terlihat dari interpreter "
+            f"{sys.executable}. Kemungkinan pip dan program memakai interpreter berbeda."
+        )
         return False
-    if count <= 0:
-        return False
-    if libs < 2:
-        if not quiet:
-            warn(
-                "GPU terdeteksi tapi pustaka CUDA belum termuat -> memasang "
-                "nvidia-cublas-cu12 dan nvidia-cudnn-cu12 (bisa memakan waktu "
-                "beberapa menit)."
-            )
-        return False
+    log(f"Paket pustaka CUDA terpasang di: {diag['nvidia_dir']}")
     return True
 
 
@@ -425,20 +554,19 @@ def setup_cuda_libs() -> bool:
     faster-whisper >= 1.1 dengan ctranslate2 4.x butuh cuBLAS 12 & cuDNN 9. Keduanya
     biasanya sudah terpasang di Colab tapi sering tidak ada di LD_LIBRARY_PATH.
     """
-    if not gpu_name():
+    gpu = gpu_name()
+    if not gpu:
         log("Tidak ada GPU terdeteksi (nvidia-smi tidak ada) -> CPU, compute int8.")
         return False
 
-    log(f"GPU terdeteksi: {gpu_name()}")
-    if not ctranslate2_sees_cuda():
+    log(f"GPU terdeteksi: {gpu}")
+    diag = cuda_diagnostics()
+    if not cuda_ready(diag):
+        log("GPU belum bisa dipakai ctranslate2. Causa yang terdeteksi:")
+        log(explain_cuda_failure(diag, gpu))
         log("Memasang pustaka CUDA untuk ctranslate2...")
-        run(
-            [sys.executable, "-m", "pip", "install", "-q", "--disable-pip-version-check",
-             "nvidia-cublas-cu12", "nvidia-cudnn-cu12==9.*", "nvidia-cufft-cu12",
-             "nvidia-curand-cu12"],
-            check=False,
-            timeout=3600,
-        )
+        if not install_cuda_libs():
+            log("Pustaka CUDA tidak terpasang lengkap -> lanjut dengan CPU (int8).")
 
     existing = [p for p in os.environ.get("LD_LIBRARY_PATH", "").split(os.pathsep) if p]
     for d in nvidia_lib_dirs():
@@ -450,13 +578,20 @@ def setup_cuda_libs() -> bool:
     if have("ldconfig"):  # re-link .so baru supaya langsung ditemukan
         subprocess.run(["ldconfig"], capture_output=True, text=True)
 
-    if ctranslate2_sees_cuda(quiet=True):
-        log("ctranslate2 OK: GPU dipakai (device=cuda, compute=float16).")
+    diag = cuda_diagnostics()
+    if cuda_ready(diag):
+        log(
+            "ctranslate2 OK: GPU dipakai (device=cuda, compute=float16) "
+            f"- {diag.get('device_count')} GPU terlihat, "
+            f"ctranslate2 {diag.get('ctranslate2', '?')}."
+        )
         return True
 
     warn(
-        "GPU ada tapi ctranslate2 tidak bisa memakainya -> fallback ke CPU (int8).\n"
-        "  Transkripsi lebih lambat, tetapi pipeline tetap jalan."
+        "GPU ada tapi ctranslate2 tetap tidak bisa memakainya -> fallback ke CPU (int8).\n"
+        "  Penyebab spesifik setelah memasang pustaka:\n"
+        + explain_cuda_failure(diag, gpu)
+        + "\n  Transkripsi lebih lambat, tetapi pipeline tetap jalan."
     )
     return False
 
@@ -839,7 +974,20 @@ def main(argv: list[str] | None = None) -> int:
         log(f"Proyek  : {project}")
         log(f".env    : {env_path} (ada: {env_path.is_file()})")
         log(f"FFmpeg  : {have('ffmpeg')} | FFprobe: {have('ffprobe')}")
-        log(f"GPU     : {gpu_name() or 'tidak ada'} | ctranslate2 CUDA: {ctranslate2_sees_cuda()}")
+        gpu = gpu_name()
+        diag = cuda_diagnostics()
+        log(f"GPU     : {gpu or 'tidak ada'}")
+        log(f"CUDA    : siap={cuda_ready(diag)} device_count={diag.get('device_count')}")
+        log(f"ctranslate2 : {diag.get('ctranslate2', '?')} | python: {diag.get('python')}")
+        for lib, state in (diag.get("libs") or {}).items():
+            prefix = f"{lib}: "
+            log(f"  {lib:<20} {state[len(prefix):] if state.startswith(prefix) else state}")
+        log(f"LD_LIBRARY_PATH : {diag.get('ld_path') or '(kosong)'}")
+        if not cuda_ready(diag) and gpu:
+            log("")
+            log("Penyebab GPU tidak dipakai:")
+            log(explain_cuda_failure(diag, gpu))
+        log(f".env device      : {read_env(env_path).get('WHISPER_DEVICE', '(kosong)')}")
         return 0
 
     step(5, 5, "Pipeline")

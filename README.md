@@ -133,6 +133,7 @@ venv/bin/python main.py \
 | `Sign in to confirm you're not a bot` | Reputasi IP sedang ditandai, bukan bug program. Program sudah mencoba ulang dengan player client tanpa login. Kalau tetap ditolak: pakai file lokal (`input/`), kirim cookie (`--cookies cookies.txt`), tunggu beberapa jam, atau ganti jaringan. Lihat [P-016](problem.md) |
 | `HTTP 429` dari OpenRouter | Kuota model gratis habis; tunggu, ganti model `:free`, atau pakai akun yang pernah beli kredit |
 | `libcublas.so.12 is not found` | GPU tidak bisa dipakai. Otomatis turun ke CPU; kalau `WHISPER_DEVICE=cuda` dipaksa, ubah ke `cpu` + `int8`, atau jalankan lewat `autoclip_colab.py` |
+| `[colab] GPU ada tapi ctranslate2 tidak bisa memakainya -> fallback ke CPU` | Angka `[transcribe] device=cpu` muncul, padahal Colab punya GPU. Cek penyebabnya dengan `!python autoclip_colab.py --check-env` (baris `CUDA :` + daftar pustaka) — biasanya perlu `pip install nvidia-cuda-runtime-cu12 nvidia-cublas-cu12 "nvidia-cudnn-cu12==9.*"` lalu restart runtime. Lihat [P-019](problem.md) |
 | `Transkripsi kosong` | Coba `--language auto` |
 | Wajah tidak terdeteksi | Otomatis fallback ke crop tengah, jadi aman |
 

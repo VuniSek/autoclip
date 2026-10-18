@@ -17,3 +17,6 @@ __pycache__/
 
 # Tool
 .DS_Store
+
+# Screenshot dari user (jangan di-commit)
+*.png

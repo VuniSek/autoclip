@@ -512,3 +512,50 @@
     sebelum ada request apa pun dengan pesan "File cookies tidak ditemukan: ..." dan
     kode keluar **4**; `YT_COOKIES_FILE=<path yang tidak ada>` di `.env` berhenti
     lebih awal dengan `[KONFIGURASI BELUM LENGKAP]` (kode keluar 2).
+
+## F-019 | pelengkap P-019 (diagnostik CUDA: penyebab, bukan sekadar "fallback")
+- Perubahan (file dan apa yang diubah):
+  - `autoclip_colab.py`:
+    - `cuda_diagnostics()` menjalankan probe JSON di subprocess yang sama dengan
+      interpreter pipeline, sehingga **seluruh** kondisi dilaporkan: `device_count`
+      dari `ctranslate2.get_cuda_device_count()`, status tiap pustaka
+      (`libcublas.so.12`, `libcudnn.so.9`, `libcudart.so.12`, `libcublasLt.so.12`)
+      beserta pesan error loader, lokasi paket pip `nvidia`, dan `LD_LIBRARY_PATH`.
+    - `cuda_ready(diag)` = device_count > 0 **dan** kedua pustaka wajib termuat.
+    - `explain_cuda_failure(diag, gpu)` menyusun penjelasan per kondisi:
+      GPU tidak terlihat (kontras dengan `nvidia-smi` + perintah perbaikan),
+      pustaka gagal dimuat (nama + error), paket `nvidia` tidak terlihat
+      (indikasi pip & program memakai interpreter berbeda), probe gagal total.
+    - `install_cuda_libs()` menggantikan `pip -q`: output ditangkap, kode keluar
+      diperiksa, lalu `import nvidia` dicek di interpreter yang sedang berjalan;
+      `nvidia-cuda-runtime-cu12` ikut dipasang karena `libcudart.so.12` juga dibutuhkan.
+    - `setup_cuda_libs()` mencetak diagnosis **sebelum** memasang, dan setelah
+      memasang lagi mencetak penyebab spesifik bila tetap gagal (dulu cuma
+      "fallback ke CPU (int8)" tanpa alasan). `ctranslate2_sees_cuda(quiet=)`
+      dipertahankan sebagai pembungkus tipis yang ikut mencetak penjelasan.
+    - `--check-env` sekarang mencetak device_count, versi ctranslate2, status tiap
+      pustaka, `LD_LIBRARY_PATH`, penyebab bila belum siap, dan device yang
+      tertulis di `.env`.
+  - `tests/test_cuda_diagnostics.py` (baru, 6 skenario dengan dict probe disimulasikan).
+  - `README.md`: baris troubleshooting GPU + perintah `--check-env`.
+- Alasan: di P-019 program sudah memasang pustaka CUDA, tetap turun ke CPU, dan
+  tidak ada satu baris pun yang menjelaskan kenapa — karena probe lama mengembalikan
+  satu nilai `False` untuk tiga kondisi berbeda dan pemeriksaan kedua dipanggil
+  dengan `quiet=True`. Tanpa penyebab, mitigasi (install ulang paket, restart
+  runtime, ganti runtime) jadi tebakan.
+- Hasil pengujian ulang:
+  - `tests/test_cuda_diagnostics.py` **lulus** (6 skenario): kondisi sehat -> siap;
+    pustaka hilang -> belum siap + nama pustaka & errornya; `device_count=0` ->
+    kontras dengan `nvidia-smi` + perintah `pip install`; probe rusak -> program
+    masih hidup dengan pesan; paket `nvidia` hilang -> dilaporkan; probe nyata di
+    mesin lokal tidak membuat program jatuh.
+  - `venv/bin/python autoclip_colab.py --check-env --skip-install` di mesin tanpa
+    GPU: `CUDA : siap=False device_count=0`, keempat pustaka tampil dengan error
+    loader, `.env` **tidak** berubah (md5 sebelum = sesudah), device yang terbaca
+    `auto`.
+  - Regresi: `main.py --help`, `autoclip_colab.py --help`, `py_compile`, dan
+    seluruh uji lain (`test_bot_check`, `test_highlight` 7/7, `test_progress`,
+    `test_transcribe_cuda_fallback`) tetap lulus.
+- Catatan: akar masalah sebenarnya di Colab **belum terkonfirmasi** — mesin ini tidak
+  punya GPU, jadi yang bisa diuji hanya logika diagnosikanya. P-019 tetap OPEN
+  sampai `--check-env` dijalankan di Colab.
