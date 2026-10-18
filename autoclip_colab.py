@@ -361,18 +361,55 @@ def gpu_name() -> str:
 
 
 def nvidia_lib_dirs() -> list[Path]:
-    """Folder pustaka NVIDIA hasil pip (ctranslate2 membutuhkannya di LD_LIBRARY_PATH)."""
-    dirs: list[Path] = []
-    try:
-        import nvidia  # type: ignore
+    """Folder pustaka NVIDIA (ctranslate2 membutuhkannya di LD_LIBRARY_PATH).
 
-        base = Path(nvidia.__file__).resolve().parent
-        dirs.extend(sorted(p for p in base.glob("*") if (p / "lib").is_dir()))
+    Dipindai dari SELURUH `sys.path` (site-packages, dist-packages, dan user site),
+    bukan hanya dari `nvidia.__file__`: kalau pip memasang paket ke pohon lain,
+    `nvidia.__file__` akan tetap menunjuk paket lama sehingga folder barunya tidak
+    pernah ikut dipindai (lihat problem.md P-021).
+    """
+    import site
+
+    dirs: list[Path] = []
+    roots: list[Path] = []
+    try:
+        roots.extend(Path(p) for p in site.getsitepackages())
     except Exception:
         pass
-    for extra in ("/usr/local/cuda/lib64", "/usr/local/cuda-12/lib64"):
+    try:
+        user_site = site.getusersitepackages()
+        if isinstance(user_site, str):
+            roots.append(Path(user_site))
+    except Exception:
+        pass
+    roots.extend(Path(p) for p in sys.path if p)
+
+    seen: set[str] = set()
+
+    def tambah(path: Path) -> None:
+        teks = str(path)
+        if teks not in seen:
+            seen.add(teks)
+            dirs.append(path)
+
+    for root in roots:
+        nvidia = root / "nvidia"
+        if not nvidia.is_dir():
+            continue
+        for pkg in sorted(nvidia.iterdir()):
+            lib = pkg / "lib"
+            if lib.is_dir():
+                tambah(lib)
+        # beberapa wheel menaruh semua .so langsung di nvidia/cu12/lib atau nvidia/lib
+        for nama in ("cu12", "cu13", "lib"):
+            lib = nvidia / nama
+            if lib.is_dir():
+                tambah(lib)
+
+    for extra in ("/usr/local/cuda/lib64", "/usr/local/cuda-12/lib64",
+                  "/usr/lib/x86_64-linux-gnu"):
         if Path(extra).is_dir():
-            dirs.append(Path(extra))
+            tambah(Path(extra))
     return dirs
 
 
@@ -384,13 +421,77 @@ CUDA_OPTIONAL_LIBS = ("libcudart.so.12", "libcublasLt.so.12")
 # kondisi berbeda, dan pemeriksaan kedua dipanggil dengan quiet=True, jadi alasan
 # sebenarnya tidak pernah sampai ke log.
 CUDA_PROBE = r"""
-import ctypes, json, os, sys
+import ctypes, glob, json, os, site, sys
 info = {
     "python": sys.executable,
     "ld_path": os.environ.get("LD_LIBRARY_PATH", ""),
     "libs": {},
+    "found": {},
+    "missing": {},
     "errors": {},
 }
+
+def candidate_dirs():
+    # Semua folder yang mungkin berisi .so NVIDIA: seluruh pohon site-packages
+    # (bukan hanya nvidia.__file__), plus LD_LIBRARY_PATH, plus CUDA bawaan.
+    roots = []
+    try:
+        roots.extend(site.getsitepackages())
+    except Exception:
+        pass
+    try:
+        user = site.getusersitepackages()
+        if isinstance(user, str):
+            roots.append(user)
+    except Exception:
+        pass
+    roots.extend(p for p in sys.path if p)
+    dirs = []
+    for root in roots:
+        nvidia = os.path.join(root, "nvidia")
+        if not os.path.isdir(nvidia):
+            continue
+        for pkg in sorted(os.listdir(nvidia)):
+            d = os.path.join(nvidia, pkg, "lib")
+            if os.path.isdir(d):
+                dirs.append(d)
+        for name in ("cu12", "cu13", "lib"):
+            d = os.path.join(nvidia, name)
+            if os.path.isdir(d):
+                dirs.append(d)
+    dirs.extend(p for p in os.environ.get("LD_LIBRARY_PATH", "").split(os.pathsep) if p)
+    dirs.extend(d for d in ("/usr/local/cuda/lib64", "/usr/local/cuda-12/lib64",
+                            "/usr/lib/x86_64-linux-gnu") if os.path.isdir(d))
+    seen, out = set(), []
+    for d in dirs:
+        if d not in seen:
+            seen.add(d)
+            out.append(d)
+    return out
+
+DIRS = candidate_dirs()
+
+def find_lib(soname):
+    # 1) andalkan loader (paling akurat: meniruqyat ctranslate2)
+    try:
+        ctypes.CDLL(soname)
+        return "ok", None
+    except OSError as exc:
+        pesan = str(exc)
+    # 2) cari sendiri di folder kandidat
+    for d in DIRS:
+        for hit in sorted(glob.glob(os.path.join(d, soname))):
+            try:
+                ctypes.CDLL(hit, mode=ctypes.RTLD_GLOBAL)
+                return "loaded:" + hit, None
+            except OSError as exc2:
+                return "gagal:" + hit + " -> " + str(exc2), None
+    # 3) tidak ada; laporkan versi lain yang terpasang (indikasi wheel CUDA 13)
+    lain = []
+    for d in DIRS:
+        lain.extend(sorted(glob.glob(os.path.join(d, "lib" + soname[3:-3] + "*"))))
+    return pesan, sorted(os.path.basename(p) for p in lain)[:4]
+
 try:
     import ctranslate2 as ct
     info["ctranslate2"] = getattr(ct, "__version__", "?")
@@ -401,15 +502,20 @@ try:
         info["errors"]["get_cuda_device_count"] = type(exc).__name__ + ": " + str(exc)
 except Exception as exc:
     info["errors"]["import ctranslate2"] = type(exc).__name__ + ": " + str(exc)
+
 for lib in %s:
-    try:
-        ctypes.CDLL(lib)
-        info["libs"][lib] = "ok"
-    except OSError as exc:
-        info["libs"][lib] = str(exc)
+    hasil, lain = find_lib(lib)
+    info["libs"][lib] = hasil
+    if hasil.startswith("loaded:"):
+        info["found"][lib] = hasil.split(":", 1)[1]
+    elif hasil.startswith("gagal:"):
+        info["found"][lib] = hasil.split(" -> ", 1)[0].split(":", 1)[1]
+    if lain:
+        info["missing"][lib] = lain
+
 try:
     import nvidia
-    info["nvidia_dir"] = os.path.dirname(nvidia.__file__)
+    info["nvidia_dir"] = getattr(nvidia, "__file__", None) and os.path.dirname(nvidia.__file__)
 except Exception as exc:
     info["errors"]["import nvidia"] = type(exc).__name__ + ": " + str(exc)
 print(json.dumps(info))
@@ -444,11 +550,21 @@ def cuda_diagnostics() -> dict:
     }
 
 
+def jumlah_ld_path(diag: dict) -> int:
+    return len([p for p in (diag.get("ld_path") or "").split(os.pathsep) if p])
+
+
+def lib_loaded(state: str) -> bool:
+    """Status pustaka dari probe: 'ok' (loader) atau 'loaded:<path>' (muat paksa)."""
+    return state == "ok" or state.startswith("loaded:")
+
+
 def cuda_ready(diag: dict) -> bool:
     """True kalau ctranslate2 menghitung GPU dan pustaka wajibnya termuat."""
     if int(diag.get("device_count") or 0) <= 0:
         return False
-    return all(diag.get("libs", {}).get(lib) == "ok" for lib in CUDA_LIBS)
+    libs = diag.get("libs") or {}
+    return all(lib_loaded(libs.get(lib, "")) for lib in CUDA_LIBS)
 
 
 def explain_cuda_failure(diag: dict, gpu: str) -> str:
@@ -472,18 +588,40 @@ def explain_cuda_failure(diag: dict, gpu: str) -> str:
     broken = [
         (lib, state)
         for lib, state in (diag.get("libs") or {}).items()
-        if state != "ok"
+        if not lib_loaded(state)
     ]
     if broken:
         if count is not None and int(count) > 0:
             lines.append(
                 f"  GPU '{gpu}' terlihat oleh ctranslate2, tapi pustaka CUDA di bawah "
-                "belum bisa dimuat loader."
+                "belum bisa dimuat."
             )
-        lines.append("  Pustaka yang gagal dimuat loader:")
+        lines.append("  Pustaka yang gagal dimuat:")
         for lib, state in broken:
-            prefix = f"{lib}: "
-            lines.append(f"    - {lib}: {state[len(prefix):] if state.startswith(prefix) else state}")
+            if state.startswith("gagal:"):
+                path, _, err = state.partition(" -> ")
+                lines.append(f"    - {lib}: ada di {path[len('gagal:'):]} tapi gagal: {err}")
+            elif "cannot open shared object file" in state:
+                lines.append(
+                    f"    - {lib}: TIDAK ADA di folder mana pun yang dipindai "
+                    f"({jumlah_ld_path(diag)} di LD_LIBRARY_PATH): {state}"
+                )
+                if (diag.get("missing") or {}).get(lib):
+                    lines.append(
+                        "      yang terpasang hanya versi lain: "
+                        + ", ".join(diag["missing"][lib])
+                        + " (ctranslate2 butuh .so.12)"
+                    )
+                lines.append(
+                    "      perbaiki: pip install --force-reinstall --no-deps "
+                    "nvidia-cublas-cu12 nvidia-cuda-runtime-cu12"
+                )
+            else:
+                lines.append(f"    - {lib}: {state}")
+    muat_paksa = diag.get("found") or {}
+    if muat_paksa:
+        lines.append("  Pustaka yang dimuat lewat path absolut:")
+        lines += [f"    - {lib}: {path}" for lib, path in muat_paksa.items()]
     if diag.get("errors", {}).get("get_cuda_device_count"):
         lines.append(f"  get_cuda_device_count(): {diag['errors']['get_cuda_device_count']}")
     if diag.get("errors", {}).get("probe"):
@@ -548,6 +686,44 @@ def install_cuda_libs() -> bool:
     return True
 
 
+def set_cuda_ld_path() -> int:
+    """Tambahkan semua folder pustaka NVIDIA ke LD_LIBRARY_PATH. Return jumlahnya."""
+    existing = [p for p in os.environ.get("LD_LIBRARY_PATH", "").split(os.pathsep) if p]
+    for d in nvidia_lib_dirs():
+        if str(d) not in existing:
+            existing.append(str(d))
+    os.environ["LD_LIBRARY_PATH"] = os.pathsep.join(existing)
+    if have("ldconfig"):  # re-link .so baru supaya langsung ditemukan
+        subprocess.run(["ldconfig"], capture_output=True, text=True)
+    return len(existing)
+
+
+def missing_sonames(diag: dict) -> list[str]:
+    """Pustaka yang file .so-nya benar-benar tidak ada di mana pun."""
+    return [
+        lib
+        for lib in CUDA_LIBS
+        if "cannot open shared object file" in (diag.get("libs") or {}).get(lib, "")
+    ]
+
+
+def force_install_cuda_libs() -> None:
+    """Pemasangan ulang paksa untuk kasus wheel CUDA 13 menutupi wheel CUDA 12.
+
+    `pip install` biasa replied "already satisfied" padahal `libcublas.so.12` tidak
+    pernah terpasang karena yang ada hanya `libcublas.so.13` (lihat problem.md P-021).
+    """
+    cmd = [
+        sys.executable, "-m", "pip", "install", "--disable-pip-version-check",
+        "--force-reinstall", "--no-deps", "nvidia-cublas-cu12", "nvidia-cuda-runtime-cu12",
+    ]
+    log(f"$ {' '.join(cmd)}")
+    proc = subprocess.run(cmd, capture_output=True, text=True, timeout=3600)
+    if proc.returncode != 0:
+        tail = (proc.stderr or proc.stdout or "").strip().splitlines()[-8:]
+        warn("pip --force-reinstall gagal:\n  " + "\n  ".join(tail))
+
+
 def setup_cuda_libs(install: bool = True) -> bool:
     """Pastikan `ctranslate2` bisa memakai GPU. Return True kalau CUDA benar-benar kepakai.
 
@@ -581,17 +757,25 @@ def setup_cuda_libs(install: bool = True) -> bool:
         if not install_cuda_libs():
             log("Pustaka CUDA tidak terpasang lengkap -> lanjut dengan CPU (int8).")
 
-    existing = [p for p in os.environ.get("LD_LIBRARY_PATH", "").split(os.pathsep) if p]
-    for d in nvidia_lib_dirs():
-        if str(d) not in existing:
-            existing.append(str(d))
-    os.environ["LD_LIBRARY_PATH"] = os.pathsep.join(existing)
-    log(f"LD_LIBRARY_PATH diset ke {len(existing)} folder pustaka NVIDIA")
-
-    if have("ldconfig"):  # re-link .so baru supaya langsung ditemukan
-        subprocess.run(["ldconfig"], capture_output=True, text=True)
+    n_directions = set_cuda_ld_path()
+    log(f"LD_LIBRARY_PATH diset ke {n_directions} folder pustaka NVIDIA")
 
     diag = cuda_diagnostics()
+    if not cuda_ready(diag):
+        hilang = missing_sonames(diag)
+        if hilang and install:
+            # Pustaka .so.12 tidak ada sama sekali: pasang ulang paksa supaya
+            # wheel CUDA 13 yang menutupinya tidak mencegah wheel CUDA 12.
+            warn(
+                "File pustaka berikut tidak ditemukan di folder mana pun: "
+                + ", ".join(hilang)
+                + "\n  Memasang ulang paksa (--force-reinstall)..."
+            )
+            force_install_cuda_libs()
+            n_directions = set_cuda_ld_path()
+            log(f"LD_LIBRARY_PATH diset ke {n_directions} folder pustaka NVIDIA")
+            diag = cuda_diagnostics()
+
     if cuda_ready(diag):
         log(
             "ctranslate2 OK: GPU dipakai (device=cuda, compute=float16) "
@@ -996,7 +1180,8 @@ def main(argv: list[str] | None = None) -> int:
         log(f"ctranslate2 : {diag.get('ctranslate2', '?')} | python: {diag.get('python')}")
         for lib, state in (diag.get("libs") or {}).items():
             prefix = f"{lib}: "
-            log(f"  {lib:<20} {state[len(prefix):] if state.startswith(prefix) else state}")
+            bersih = state[len(prefix):] if state.startswith(prefix) else state
+            log(f"  {lib:<20} {bersih}")
         log(f"LD_LIBRARY_PATH : {diag.get('ld_path') or '(kosong)'}")
         if not cuda_ready(diag) and gpu:
             log("")

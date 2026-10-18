@@ -586,3 +586,54 @@
   - Regresi: `py_compile`, `main.py --help`, `autoclip_colab.py --help`,
     `test_bot_check`, `test_highlight` 7/7, `test_progress`,
     `test_transcribe_cuda_fallback` semuanya lulus.
+
+## F-021 | memperbaiki sebagian P-021 (`libcublas.so.12` tidak terjangkau di Colab)
+- Perubahan (file dan apa yang diubah):
+  - `autoclip_colab.py`:
+    - `nvidia_lib_dirs()` sekarang memindai **seluruh** `sys.path` (`site.getsitepackages()`,
+      user site, dan tiap entri `sys.path`), termasuk tata letak `nvidia/cu12`,
+      `nvidia/cu13`, `nvidia/lib`, plus `/usr/local/cuda*/lib64` dan
+      `/usr/lib/x86_64-linux-gnu`. Sebelumnya hanya `nvidia.__file__`, sehingga paket
+      yang terpasang di pohon site-packages lain tidak pernah terlihat.
+    - Probe `CUDA_PROBE` punya `candidate_dirs()` yang sama dan `find_lib()` berjenjang:
+      (1) andalkan loader seperti yang dilakukan ctranslate2; (2) kalau gagal, telusuri
+      sendiri folder kandidat lalu muat lewat **path absolut** dengan `RTLD_GLOBAL`;
+      (3) kalau file `.so` yang dicari memang tidak ada, laporkan versi lain yang
+      terpasang (indikasi wheel CUDA 13, mis. `libcublas.so.13`).
+    - `lib_loaded()` Textsros `ok` dan `loaded:<path>` sama-sama berarti termuat;
+      `cuda_ready()` memakainya.
+    - `explain_cuda_failure()` membedakan tiga kasus: `TIDAK ADA di folder mana pun`
+      (+ versi lain yang terpasang + perintah `--force-reinstall`), `ada di <path> tapi
+      gagal: <err>`, dan daftar "dimuat lewat path absolut".
+    - `set_cuda_ld_path()` + `missing_sonames()` + `force_install_cuda_libs()`:
+      bila sesudah pemasangan biasa file `.so.12` tetap tidak ada sama sekali,
+      program escalating ke `pip install --force-reinstall --no-deps nvidia-cublas-cu12
+      nvidia-cuda-runtime-cu12` lalu probe ulang.
+  - `tests/test_cuda_diagnostics.py`: skenario 8 (tiga status baru + versi lain yang
+    terpasang) dan skenario 9 (pemindaian seluruh `sys.path` memakai folder sementara).
+- Alasan: data dari Colab menunjukkan `device_count > 0` (ctranslate2 sudah bicara
+  dengan GPU) tetapi `libcublas/cudart/cublasLt.so.12` "cannot open shared object
+  file" **setelah** pip memasang paket dan `LD_LIBRARY_PATH` di-set ke 16 folder,
+  sedangkan `libcudnn.so.9` termuat. Uji mekanismenya di mesin lokal (A-D) membuktikan
+  `LD_LIBRARY_PATH` dari `os.environ` memang sampai ke subprocess, jadi masalahnya bukan
+  pewarisan environment melainkan **file-nya tidak ada di folder yang dipindai** atau
+  **`nvidia.__file__` menunjuk pohon yang salah**. Keduanya ditutup di sini, dan
+  sekarang program bisa membedakan "tidak ada" vs "ada tapi gagal dimuat".
+- Hasil pengujian ulang:
+  - `tests/test_cuda_diagnostics.py` lulus (9 skenario). Perluasan baru: `loaded:<path>`
+    dihitung termuat, `gagal:<path> -> err` ditampilkan lengkap, "TIDAK ADA" memuat
+    pesan loader asli + versi lain yang terpasang + perintah `--force-reinstall`,
+    dan `nvidia_lib_dirs()` menangkap `nvidia/*/lib` maupun `nvidia/cu12` dari
+    `sys.path` buatan (3 folder terdeteksi).
+  - Uji mekanismenya di mesin lokal (4 kasus A-D) tetap berlaku: `LD_LIBRARY_PATH`
+    dari `os.environ` diteruskan ke subprocess (C) tetapi perubahan setelah
+    `ctypes` dipakai tidak berlaku dalam proses yang sama (D) — alasannya
+    `setup_cuda_libs()` selalu memindahkan `LD_LIBRARY_PATH` ke **subprocess** probe.
+  - `venv/bin/python autoclip_colab.py --check-env --skip-install` di mesin tanpa GPU
+    tetap jalan dan menampilkan 4 pustaka gagal; `.env` tidak berubah.
+  - Regresi: `py_compile`, `test_highlight` 7/7, `test_progress`, `test_bot_check`,
+    `test_transcribe_cuda_fallback`, `main.py --help`, `autoclip_colab.py --help` lulus.
+- Catatan: akar masalah di Colab **masih belum terkonfirmasi** (P-021 OPEN) — mesin ini
+  tidak punya GPU. Jalankan `--check-env` di Colab setelah `git pull`; baris
+  "TIDAK ADA di folder mana pun" + "yang terpasang hanya versi lain" akan langsung
+  menunjukkan apakah penyebabnya wheel CUDA 13 yang menutupi wheel CUDA 12.

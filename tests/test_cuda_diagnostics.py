@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import os
 import sys
+import tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -64,7 +65,7 @@ def main() -> int:
         print("   ", line)
     if colab.cuda_ready(no_libs):
         failures.append("pustaka hilang harus dianggap belum siap")
-    if "libcublas.so.12: cannot open shared object file" not in text:
+    if "libcublas.so.12" not in text or "cannot open shared object file" not in text:
         failures.append("penjelasan tidak menyebut pustaka yang gagal + alasannya")
     if "Tesla T4" not in text:
         failures.append("penjelasan tidak menyebut GPU yang terdeteksi")
@@ -177,6 +178,86 @@ def main() -> int:
             failures.append("install=True harus memasang paket CUDA")
     finally:
         bersihkan()
+
+    # 8. Nilai status baru dari probe (P-021): file ditemukan -> dimuat paksa; file
+ #    tidak ada -> dilaporkan sebagai TIDAK ADA + versi lain yang terpasang.
+    print("\n[8] status 'loaded:' / 'gagal:' / TIDAK ADA")
+    ketemu = clone(
+        SEHAT,
+        libs={
+            "libcublas.so.12": "loaded:/usr/lib/python3/nvidia/cublas/lib/libcublas.so.12",
+            "libcudnn.so.9": "ok",
+            "libcudart.so.12": "loaded:/usr/lib/python3/nvidia/cuda_runtime/lib/libcudart.so.12",
+            "libcublasLt.so.12": "loaded:/usr/lib/python3/nvidia/cublas/lib/libcublasLt.so.12",
+        },
+        found={
+            "libcublas.so.12": "/usr/lib/python3/nvidia/cublas/lib/libcublas.so.12",
+            "libcudart.so.12": "/usr/lib/python3/nvidia/cuda_runtime/lib/libcudart.so.12",
+            "libcublasLt.so.12": "/usr/lib/python3/nvidia/cublas/lib/libcublasLt.so.12",
+        },
+    )
+    print(f"  semua termuat -> cuda_ready={colab.cuda_ready(ketemu)} "
+          f"missing={colab.missing_sonames(ketemu)}")
+    if not colab.cuda_ready(ketemu):
+        failures.append("status 'loaded:<path>' harus dihitung termuat")
+    if colab.missing_sonames(ketemu):
+        failures.append("semua pustaka ada -> tidak boleh ada yang 'hilang'")
+    ada_di_path = clone(
+        ketemu,
+        libs=dict(ketemu["libs"], **{"libcudnn.so.9": "gagal:/x/libcudnn.so.9 -> error"}),
+    )
+    teks_ok = colab.explain_cuda_failure(ada_di_path, "T4")
+    if "gagal:" not in teks_ok or "/x/libcudnn.so.9" not in teks_ok:
+        failures.append("status 'gagal:<path> -> err' harus ditampilkan lengkap")
+    if "dimuat lewat path absolut" not in colab.explain_cuda_failure(
+        clone(ada_di_path, libs=dict(ketemu["libs"])), "T4"
+    ):
+        failures.append("daftar pustaka yang dimuat lewat path absolut tidak ditampilkan")
+
+    tidak_ada = clone(
+        SEHAT,
+        libs={lib: f"{lib}: cannot open shared object file: No such file or directory"
+              for lib in colab.CUDA_LIBS + colab.CUDA_OPTIONAL_LIBS},
+        found={},
+        missing={"libcublas.so.12": ["libcublas.so.13", "libcublas.so.13.0.87"]},
+        ld_path="/a:/b",
+    )
+    teks = colab.explain_cuda_failure(tidak_ada, "Tesla T4, 15360 MiB")
+    print("  penjelasan (baris(libcublas):")
+    for line in [ln for ln in teks.splitlines() if "libcublas" in ln or "perbaiki" in ln][:4]:
+        print("   ", line)
+    if not colab.lib_loaded("ok") or not colab.lib_loaded("loaded:/x"):
+        failures.append("lib_loaded harus menerima 'ok' dan 'loaded:'")
+    if colab.lib_loaded("gagal:/x -> err") or colab.lib_loaded(""):
+        failures.append("lib_loaded harus menolak 'gagal:' dan string kosong")
+    if colab.missing_sonames(tidak_ada) != list(colab.CUDA_LIBS):
+        failures.append(f"missing_sonames salah: {colab.missing_sonames(tidak_ada)}")
+    if "libcublas.so.13" not in teks:
+        failures.append("penjelasan tidak menyebut versi lain yang terpasang (CUDA 13)")
+    if "--force-reinstall" not in teks:
+        failures.append("penjelasan tidak memberi perintah --force-reinstall")
+
+    # 9. nvidia_lib_dirs() memindai SELURUH sys.path, bukan hanya nvidia.__file__.
+    print("\n[9] nvidia_lib_dirs() memindai semua sys.path")
+    with tempfile.TemporaryDirectory() as td:
+        root = Path(td)
+        (root / "nvidia" / "cublas" / "lib").mkdir(parents=True)
+        (root / "nvidia" / "cu12").mkdir(parents=True)
+        asli_path = sys.path[:]
+        asli_ld = os.environ.get("LD_LIBRARY_PATH", "")
+        try:
+            sys.path.insert(0, str(root))
+            dirs = [str(d) for d in colab.nvidia_lib_dirs()]
+            print(f"  folder terdeteksi: {len(dirs)}")
+            if str(root / "nvidia" / "cublas" / "lib") not in dirs:
+                failures.append("folder nvidia/cublas/lib dari sys.path tidak terpindai")
+            if str(root / "nvidia" / "cu12") not in dirs:
+                failures.append("folder nvidia/cu12 dari sys.path tidak terpindai")
+        finally:
+            sys.path[:] = asli_path
+            os.environ["LD_LIBRARY_PATH"] = asli_ld
+    if colab.cuda_ready(SEHAT) is not True:
+        failures.append("regresi: kondisi sehat harus tetap siap")
 
     print()
     if failures:

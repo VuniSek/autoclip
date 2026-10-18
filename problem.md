@@ -458,3 +458,63 @@
   `Mode : GPU (cuda/float16)`; kalau belum, pesannya menyuruh jalan tanpa
   `--skip-install` sekali saja untuk memasang pustakanya.
 - Status: FIXED (lihat `fix.md` F-020)
+
+## P-021 | Colab: `libcublas.so.12` tetap tidak ditemukan padahal paket nvidia terpasang
+- Waktu: 2026-10-18
+- File/langkah terkait: `autoclip_colab.py` -> `nvidia_lib_dirs()` + `cuda_diagnostics()` +
+  `setup_cuda_libs()`, terlihat di langkah 3/5 "Dependency Python + GPU"
+- Pesan error / gejala (salin apa adanya, tanpa API key):
+  ```
+  [colab] GPU terdeteksi: Tesla T4, 15360 MiB
+  [colab] GPU belum bisa dipakai ctranslate2. Causa yang terdeteksi:
+  [colab]   GPU 'Tesla T4, 15360 MiB' terlihat oleh ctranslate2, tapi pustaka CUDA di bawah belum bisa dimuat loader.
+  [colab]   Pustaka yang gagal dimuat loader:
+  [colab]     - libcublas.so.12: cannot open shared object file: No such file or directory
+  [colab]     - libcudart.so.12: cannot open shared object file: No such file or directory
+  [colab]     - libcublasLt.so.12: cannot open shared object file: No such file or directory
+  [colab]   paket nvidia terpasang di: /usr/local/lib/python3.13/dist-packages/nvidia
+  [colab] $ /usr/bin/python3 -m pip install --disable-pip-version-check nvidia-cublas-cu12 nvidia-cudnn-cu12==9.* nvidia-cuda-runtime-cu12 nvidia-cufft-cu12 nvidia-curand-cu12
+  [colab] Paket pustaka CUDA terpasang di: /usr/local/lib/python3.13/dist-packages/nvidia
+  [colab] LD_LIBRARY_PATH diset ke 16 folder pustaka NVIDIA
+  [colab]   (penjelasan diulang dengan hasil yang sama -> tetap CPU)
+  ```
+  Perhatikan: `libcudnn.so.9` **tidak** ada di daftar gagal (berarti termuat), tetapi
+  `libcublas.so.12`, `libcudart.so.12`, `libcublasLt.so.12` gagal.
+- Temuan uji mekanismenya di mesin lokal (tidak ada GPU):
+  ```
+  A: tanpa LD_LIBRARY_PATH                 -> "cannot open shared object file"   (diharapkan)
+  B: LD_LIBRARY_PATH diset di shell        -> lib ditemukan, lalu gagal di DEPENDENSINYA
+  C: os.environ['LD_LIBRARY_PATH'] di parent -> subprocess        -> lib ditemukan juga
+  D: ubah os.environ SETELAH ctypes dipakai -> GAGAL (ld.so membaca LD_LIBRARY_PATH hanya
+                                              sekali, saat proses mulai)
+  ```
+  Kesimpulan: `LD_LIBRARY_PATH` yang diset di `setup_cuda_libs()` **memang** sampai ke
+  probe, jadi penyebabnya bukan itu (uji B dan C membuktikan jalurnya bekerja).
+- Dugaan penyebab (belum terverifikasi, perlu satu probe tambahan di Colab):
+  1. Folder yang dipindai berasal dari `nvidia.__file__` saja. Kalau pip memasang
+     paket ke pohon site-packages yang lain (mis. `/root/.local/lib/python3.13/
+     site-packages/nvidia`) sementara `import nvidia` menunjuk ke
+     `dist-packages/nvidia` yang sudah ada sebelumnya, `nvidia_lib_dirs()` tidak
+     pernah melihat file barunya. Ini yang paling mungkin karena lokasi yang
+     dicetak tetap `dist-packages/nvidia` sebelum **dan** sesudah `pip install`.
+  2. Nama file di dalam folder berbeda dari soname yang dicari: wheel CUDA 13
+     (`nvidia-cublas`) menyediakan `libcublas.so.13`, sedangkan ctranslate2 4.8.3
+     butuh `.so.12`. Kalau `pip install` deem "already satisfied" oleh versi
+     CUDA 13 yang sudah ada, `libcublas.so.12` tidak pernah terpasang.
+  3. Loader menolak membuka file itu karena dependensinya belum ada — tapi pesan
+     untuk kasus itu menyebut nama dependensinya, bukan nama pustaka yang dicari
+     (lihat uji B), jadi kemungkinan ini kecil.
+- Perbaikan yang dikerjakan (lihat `fix.md` F-021):
+  1. `nvidia_lib_dirs()` memindai **seluruh** `sys.path` (termasuk user site),
+     bukan hanya `nvidia.__file__`.
+  2. Probe baru melaporkan file yang benar-benar ditemukan per pustaka
+     (`libcublas.so*` di folder mana) dan mencoba memuatnya lewat path absolut,
+     sehingga "tidak ada" vs "ada tapi gagal dimuat" tidak lagi tertukar.
+  3. Kalau soname tidak ketemu tapi file-nya ada, pustaka itu dimuat paksa dengan
+     `RTLD_GLOBAL` dari path absolut, lalu `ctranslate2` memakainya tanpa perlu
+     mencariname lewat loader lagi.
+- Cara memastikan di Colab:
+  ```
+  !python autoclip_colab.py --check-env
+  ```
+- Status: OPEN
