@@ -363,3 +363,27 @@
   dijalankan di port yang benar, alur penuh sukses 2 klip. Pelajaran: cek dulu
   apakah alamat/port pada `.env` uji cocok dengan yang dipakai skrip sebelum
   menyimpulkan program rusak.
+
+## P-018 | `main.py --help` crash: `ValueError: incomplete format`
+- Waktu: 2026-10-18
+- File/langkah terkait: `main.py` -> `parse_args()`, teks bantuan opsi `--progress-seconds`
+  (baris ~100)
+- Pesan error / gejala (salin apa adanya, tanpa API key):
+  ```
+  $ venv/bin/python main.py --help
+  Traceback (most recent call last):
+    File "/usr/lib/python3.12/argparse.py", line 298, in _expand_help
+      return self._get_help_string(action) % params
+             ~~~~~~~~~~~~~~~~~~~^^^^^^^^
+  ValueError: incomplete format
+  ```
+  Gejalanya: `main.py --help` selalu gagal, jadi tidak ada cara melihat daftar opsi
+  dari terminal. Semua opsi lain tidak tampil.
+- Dugaan penyebab: argparse mem-format setiap teks bantuan dengan operator `%`
+  (`help % params`) supaya bisa menulis `%(default)s`. Teks bantuan `--progress-seconds`
+  memuat karakter persen biasa untuk menulis "tiap 10%", yaitu:
+  `"... (default DOWNLOAD_PROGRESS_SECONDS=15). 0 = hanya tiap 10%."`
+  `%` diikuti spasi dianggap format tidak lengkap -> `ValueError`.
+  Huruf ini ikut terpasang sejak F-014 (baris progress) tapi tidak ketahuan karena
+  `--help` tidak pernah dijalankan setelahnya.
+- Status: FIXED (lihat `fix.md` F-018)

@@ -486,3 +486,29 @@
     cukup untuk lolos. Yang diuji adalah logika keputusannya (deteksi pesan, percobaan
     ulang sekali, lalu pesan yang bisa ditindaklanjuti), dan tidak ada satu pun
     request nyata ke YouTube selama pengujian.
+
+## F-018 | memperbaiki P-018 (`main.py --help` crash karena `%` di teks bantuan)
+- Perubahan (file dan apa yang diubah):
+  - `main.py` -> `parse_args()`: teks bantuan `--progress-seconds` yang memuat
+    "tiap 10%" ditulis jadi "tiap 10%%" (satu baris, dengan komentar singkat bahwa
+    argparse mem-format `help` memakai operator `%`).
+- Alasan: argparse selalu menjalankan `help_string % params` supaya `%(default)s`
+  bisa dipakai, jadi setiap persen biasa di dalam teks bantuan harus diekspresikan
+  sebagai `%%`. Huruf `%` ini sudah masuk sejak F-014 dan tidak ketahuan karena
+  `--help` tidak pernah dijalankan sesudahnya — pelajaran yang sama seperti F-011
+  dan F-013: setiap jalur baru harus dijalankan, bukan hanya ditulis.
+- Hasil pengujian ulang:
+  - `venv/bin/python main.py --help` sekarang tampil penuh: 11 opsi tercetak
+    (`--input`, `--cookies`, `--progress-seconds`, dst.) dan teksnya membaca
+    "0 = hanya tiap 10%." tanpa galat. Sebelumnya `ValueError: incomplete format`.
+  - `venv/bin/python autoclip_colab.py --help` tetap jalan (tidak ada persen di
+    teks bantuannya).
+  - Regresi setelah perbaikan: `tests/test_bot_check.py` lulus (7 skenario),
+    `tests/test_highlight.py` 7/7, `tests/test_progress.py` lulus,
+    `tests/test_transcribe_cuda_fallback.py` lulus.
+  - Alur penuh `main.py` (file lokal + mock OpenRouter): 22 segmen transkripsi,
+    2 klip 1080x1920 + `.srt`/`.ass` di `output/`, exit 0.
+  - Jalur cookie dari CLI diuji langsung: `--cookies <path yang tidak ada>` berhenti
+    sebelum ada request apa pun dengan pesan "File cookies tidak ditemukan: ..." dan
+    kode keluar **4**; `YT_COOKIES_FILE=<path yang tidak ada>` di `.env` berhenti
+    lebih awal dengan `[KONFIGURASI BELUM LENGKAP]` (kode keluar 2).

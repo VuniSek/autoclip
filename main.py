@@ -96,8 +96,10 @@ def parse_args() -> argparse.Namespace:
     p.add_argument(
         "--progress-seconds", type=float, default=None,
         help=(
+            # argparse mem-format help dengan operator '%', jadi persen biasa harus
+            # ditulis '%%' (lihat problem.md P-018).
             "Jarak minimal antar baris progress unduhan (detik, default "
-            "DOWNLOAD_PROGRESS_SECONDS=15). 0 = hanya tiap 10%."
+            "DOWNLOAD_PROGRESS_SECONDS=15). 0 = hanya tiap 10%%."
         ),
     )
     p.add_argument(

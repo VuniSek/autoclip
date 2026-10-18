@@ -189,6 +189,22 @@ Opsi Colab yang berguna:
 | `--no-download` | jangan zip/unduh hasil |
 | `-- <args>` | teruskan argumen ke `main.py`, mis. `-- --max-clips 3 --keep-temp` |
 
+### Kalau YouTube minta verifikasi bot di Colab
+
+Pesan `Sign in to confirm you're not a bot` artinya IP Colab sedang ditandai, bukan
+program yang rusak. Program sudah mencoba ulang dengan player client tanpa login.
+Kalau tetap ditolak, urutannya:
+
+1. Pakai file lokal: unduh videonya di browser, unggah ke `/content/drive`, lalu
+   `--input /content/drive/MyDrive/videos/nama.mp4`.
+2. Kirim cookie (opsional, perlu akun YouTube): export `cookies.txt` di laptop
+   (extension browser "Get cookies.txt LOCALLY"), unggah ke `/content/cookies.txt`,
+   lalu teruskan lewat `-- --cookies /content/cookies.txt`.
+3. Restart runtime (dapat IP baru) atau tunggu beberapa jam. Mengulang video yang
+   sama hanya memperburuk reputasi IP.
+
+Lihat [P-016](problem.md).
+
 Contoh paling ringkas (repo di-clone sendiri oleh skrip, ini cara pertama
 dipakai di Colab):
 
