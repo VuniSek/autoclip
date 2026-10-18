@@ -186,7 +186,7 @@ Opsi Colab yang berguna:
 | `--repo URL` | clone repo kalau belum ada (path lokal juga boleh) |
 | `--model NAMA` | model OpenRouter gratis, **wajib berakhiran `:free`** |
 | `--drive-dir PATH` | simpan hasil ke Google Drive |
-| `--skip-install` | lewati install (percobaan kedua dst.) |
+| `--skip-install` | lewati install (percobaan kedua dst.). GPU tetap diperiksa, jadi kalau pustaka CUDA sudah terpasang, mode tetap GPU |
 | `--no-download` | jangan zip/unduh hasil |
 | `-- <args>` | teruskan argumen ke `main.py`, mis. `-- --max-clips 3 --keep-temp` |
 

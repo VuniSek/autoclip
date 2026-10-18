@@ -548,11 +548,15 @@ def install_cuda_libs() -> bool:
     return True
 
 
-def setup_cuda_libs() -> bool:
+def setup_cuda_libs(install: bool = True) -> bool:
     """Pastikan `ctranslate2` bisa memakai GPU. Return True kalau CUDA benar-benar kepakai.
 
     faster-whisper >= 1.1 dengan ctranslate2 4.x butuh cuBLAS 12 & cuDNN 9. Keduanya
     biasanya sudah terpasang di Colab tapi sering tidak ada di LD_LIBRARY_PATH.
+
+    `install=False` dipakai oleh `--skip-install`: pustakanya boleh dipasang di
+    percobaan sebelumnya, jadi cukup periksa + set LD_LIBRARY_PATH tanpa pip
+    (lihat problem.md P-020).
     """
     gpu = gpu_name()
     if not gpu:
@@ -561,9 +565,18 @@ def setup_cuda_libs() -> bool:
 
     log(f"GPU terdeteksi: {gpu}")
     diag = cuda_diagnostics()
-    if not cuda_ready(diag):
+    if cuda_ready(diag):
+        log(f"ctranslate2 siap: device_count={diag.get('device_count')}, pustaka CUDA termuat.")
+    else:
         log("GPU belum bisa dipakai ctranslate2. Causa yang terdeteksi:")
         log(explain_cuda_failure(diag, gpu))
+        if not install:
+            warn(
+                "--skip-install: pustaka CUDA tidak dipasang (dan tidak boleh dipasang "
+                "karena --skip-install). Kalau ini percobaan pertama, jalankan tanpa "
+                "--skip-install supaya pustakanya dipasang sekali."
+            )
+            return False
         log("Memasang pustaka CUDA untuk ctranslate2...")
         if not install_cuda_libs():
             log("Pustaka CUDA tidak terpasang lengkap -> lanjut dengan CPU (int8).")
@@ -959,11 +972,13 @@ def main(argv: list[str] | None = None) -> int:
 
     step(3, 5, "Dependency Python + GPU")
     if args.skip_install:
-        log("--skip-install: lewati pip install.")
-        gpu = False
+        log("--skip-install: lewati pip install dependency Python.")
     else:
         setup_python_deps(project)
-        gpu = False if args.cpu else setup_cuda_libs()
+    # Probe GPU tetap jalan walau --skip-install: pustaka CUDA bisa saja sudah
+    # terpasang dari percobaan sebelumnya, dan mengabaikannya akan memaksa CPU
+    # tanpa alasan (lihat problem.md P-020).
+    gpu = False if args.cpu else setup_cuda_libs(install=not args.skip_install)
     log(f"Mode   : {'GPU (cuda/float16)' if gpu else 'CPU (int8)'}")
 
     step(4, 5, "Konfigurasi .env (model wajib :free)")

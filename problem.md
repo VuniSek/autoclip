@@ -432,3 +432,29 @@
   masalahnya "GPU tidak terlihat" atau "pustaka tidak termuat".
 - Status: OPEN (menunggu hasil `--check-env` di Colab; program sekarang sudah
   menampilkan penyebabnya sendiri)
+
+## P-020 | `--skip-install` memaksa CPU tanpa pernah memeriksa GPU
+- Waktu: 2026-10-18
+- File/langkah terkait: `autoclip_colab.py` -> `main()` langkah 3/5 "Dependency Python
+  + GPU", `setup_cuda_libs()`
+- Pesan error / gejala (salin apa adanya, tanpa API key):
+  ```
+  [colab] === [3/5] Dependency Python + GPU ===
+  [colab] --skip-install: lewati pip install.
+  [colab] Mode   : CPU (int8)
+  ```
+- Gejalanya: di Colab yang pustaka CUDA-nya **sudah** terpasang, menjalankan dengan
+  `--skip-install` (dipakai untuk percobaan kedua, hemat waktu) selalu berakhir
+  di `Mode : CPU (int8)`, padahal `setup_cuda_libs()` bisa langsung memastikan GPU.
+  Tidak ada probe GPU sama sekali pada jalur itu.
+- Dugaan penyebab: di `main()`, `--skip-install` tidak hanya melewati `pip install`
+  tetapi juga menentukan `gpu = False` secara hard-code, tanpa memanggil
+  `setup_cuda_libs()`. Konsekuensinya pengguna tidak punya cara memasang pustaka
+  CUDA sekali jalan lalu memakai GPU pada percobaan berikutnya tanpa mengulang
+  `apt-get`/`pip install` yang berat.
+- Perbaikan (lihat `fix.md` F-020): `setup_cuda_libs(install=True|False)` dan
+  `main()` sekarang selalu menjalankan probe GPU; `--skip-install` hanya
+  mematikan **pip**, bukan probe. Kalau pustakanya sudah ada, hasilnya
+  `Mode : GPU (cuda/float16)`; kalau belum, pesannya menyuruh jalan tanpa
+  `--skip-install` sekali saja untuk memasang pustakanya.
+- Status: FIXED (lihat `fix.md` F-020)

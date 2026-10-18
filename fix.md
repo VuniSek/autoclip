@@ -559,3 +559,30 @@
 - Catatan: akar masalah sebenarnya di Colab **belum terkonfirmasi** — mesin ini tidak
   punya GPU, jadi yang bisa diuji hanya logika diagnosikanya. P-019 tetap OPEN
   sampai `--check-env` dijalankan di Colab.
+
+## F-020 | memperbaiki P-020 (`--skip-install` tidak lagi memaksa CPU)
+- Perubahan (file dan apa yang diubah):
+  - `autoclip_colab.py`:
+    - `setup_cuda_libs(install: bool = True)`. Probe GPU (`gpu_name()` +
+      `cuda_diagnostics()` + set `LD_LIBRARY_PATH`) **selalu** jalan; `install=False`
+      hanya melewati `pip install`. Kalau pustakanya belum siap dan `install=False`,
+      pesan peringatan menyuruh menjalankan sekali tanpa `--skip-install`.
+    - `main()` langkah 3/5 tidak lagi `gpu = False` untuk `--skip-install`, melainkan
+      `gpu = False if args.cpu else setup_cuda_libs(install=not args.skip_install)`.
+      Langkah 2/5 (FFmpeg) tetap tidak berubah: `--skip-install` tetap berhenti kalau
+      FFmpeg tidak ada.
+  - `tests/test_cuda_diagnostics.py`: skenario 7 (3 kasus, GPU/`pip` dipalsukan).
+  - `README.md` + `AGENTS.md`: catatan bahwa `--skip-install` tidak mematikan GPU.
+- Alasan: pengguna yang sudah memasang pustaka CUDA sekali tidak punya cara memakai
+  GPU lagi tanpa mengulang `apt-get` + `pip install` yang berat; sebelumnya jalur itu
+  selalu berakhir di CPU tanpa probe sama sekali, jadi penyebabnya tidak terlihat.
+- Hasil pengujian ulang:
+  - `tests/test_cuda_diagnostics.py` lulus (7 skenario): `install=False` + pustaka
+    siap -> `gpu=True` tanpa memanggil pip; `install=False` + pustaka belum siap ->
+    `gpu=False` tanpa pip dan dengan peringatan; `install=True` -> pip dipanggil
+    1 kali. `LD_LIBRARY_PATH` dipulihkan setelah uji.
+  - `venv/bin/python autoclip_colab.py --check-env --skip-install` di mesin tanpa GPU:
+    langkah 2/5 dan 3/5 tetap tampil benar, `.env` tidak berubah.
+  - Regresi: `py_compile`, `main.py --help`, `autoclip_colab.py --help`,
+    `test_bot_check`, `test_highlight` 7/7, `test_progress`,
+    `test_transcribe_cuda_fallback` semuanya lulus.

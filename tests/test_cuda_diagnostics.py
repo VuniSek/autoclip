@@ -5,6 +5,7 @@ dipanggil dengan dict hasil probe yang disimulasikan.
 """
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 
@@ -114,6 +115,68 @@ def main() -> int:
           f"siap={colab.cuda_ready(diag)}")
     if "libs" not in diag or "python" not in diag:
         failures.append("hasil probe nyata tidak lengkap")
+
+    # 7. `setup_cuda_libs(install=...)` (problem.md P-020): GPU tetap diperiksa
+    #    walau --skip-install, tapi pip tidak boleh jalan kalau install=False.
+    print("\n[7] setup_cuda_libs: GPU dicek walau --skip-install")
+    asli = {
+        "gpu_name": colab.gpu_name,
+        "cuda_diagnostics": colab.cuda_diagnostics,
+        "install_cuda_libs": colab.install_cuda_libs,
+        "have": colab.have,
+        "ld_path": os.environ.get("LD_LIBRARY_PATH", ""),
+    }
+
+    def bersihkan() -> None:
+        os.environ["LD_LIBRARY_PATH"] = asli["ld_path"]
+        for nama, fun in (
+            ("gpu_name", asli["gpu_name"]),
+            ("cuda_diagnostics", asli["cuda_diagnostics"]),
+            ("install_cuda_libs", asli["install_cuda_libs"]),
+            ("have", asli["have"]),
+        ):
+            setattr(colab, nama, fun)
+
+    dipanggil: list[bool] = []
+
+    def install_palsu() -> bool:
+        dipanggil.append(True)
+        return True
+
+    try:
+        colab.gpu_name = lambda: "Tesla T4, 15360 MiB (palsu)"
+        colab.have = lambda cmd: False  # jangan ldconfig di mesin uji
+
+        # a) pustaka sudah siap -> GPU dipakai tanpa memanggil pip sama sekali.
+        colab.cuda_diagnostics = lambda: clone(SEHAT)
+        dipanggil.clear()
+        siap = colab.setup_cuda_libs(install=False)
+        print(f"  pustaka siap, install=False -> gpu={siap} pip={len(dipanggil)} kali")
+        if not siap:
+            failures.append("pustaka siap + install=False harus tetap memakai GPU")
+        if dipanggil:
+            failures.append("pip tidak boleh jalan saat install=False")
+
+        # b) pustaka belum siap + install=False -> CPU, tanpa pip, dengan alasan.
+        colab.cuda_diagnostics = lambda: clone(SEHAT, device_count=0)
+        dipanggil.clear()
+        siap = colab.setup_cuda_libs(install=False)
+        print(f"  pustaka belum siap, install=False -> gpu={siap} pip={len(dipanggil)} kali")
+        if siap:
+            failures.append("tanpa pustaka CUDA tidak boleh diklaim GPU siap")
+        if dipanggil:
+            failures.append("pip tidak boleh jalan saat install=False")
+
+        # c) install=True tetap memasang paket seperti sebelumnya.
+        colab.cuda_diagnostics = lambda: clone(SEHAT, device_count=0)
+        colab.install_cuda_libs = install_palsu
+        dipanggil.clear()
+        colab.setup_cuda_libs(install=True)
+        print(f"  pustaka belum siap, install=True -> pip={len(dipanggil)} kali")
+        if not dipanggil:
+            failures.append("install=True harus memasang paket CUDA")
+    finally:
+        bersihkan()
 
     print()
     if failures:
