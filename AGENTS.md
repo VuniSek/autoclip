@@ -78,6 +78,7 @@ autoclip/
 │   ├── transcriber.py  # faster-whisper, timestamp per kata, simpan JSON
 │   ├── highlight.py    # panggil OpenRouter untuk memilih segmen terbaik
 │   ├── clipper.py      # FFmpeg: potong, crop 9:16
+│   ├── merger.py       # FFmpeg concat: gabungkan semua klip jadi satu video
 │   └── subtitles.py    # buat .ass/.srt dari timestamp kata, bakar ke video
 ├── assets/            # Haar cascade untuk face tracking
 ├── tests/             # mock OpenRouter + uji modul
@@ -147,6 +148,7 @@ Opsi berguna:
 | `--min-seconds N` / `--max-seconds N` | override durasi klip |
 | `--face-tracking` / `--no-face-tracking` | paksa ikut wajah / crop tengah |
 | `--reuse-transcript` | pakai `temp/transcript.json`, lewati transkripsi (hemat waktu) |
+| `--merge` / `--no-merge` | gabungkan semua klip jadi satu video (default dari `.env` `MERGE_CLIPS`) |
 | `--keep-temp` | jangan bersihkan `temp/` |
 | `--cookies PATH` | kirim `cookies.txt` ke yt-dlp (hanya kalau YouTube minta verifikasi bot, P-016) |
 | `--env PATH` | pakai file .env lain (dipakai pengujian) |
@@ -173,6 +175,12 @@ venv/bin/python tests/test_model_gratis.py
 
 # uji penulisan .env di runner Colab (kunci pengguna tidak boleh hilang)
 venv/bin/python tests/test_env_writer.py
+
+# uji subtitle: tidak ada cue overlap, teks muat di frame, header .ass benar
+venv/bin/python tests/test_subtitles.py
+
+# uji penggabungan klip (FFmpeg concat + encode ulang + verifikasi ffprobe)
+venv/bin/python tests/test_merge.py
 
 # diagnosis lingkungan Colab (GPU, pustaka CUDA, device di .env)
 venv/bin/python autoclip_colab.py --check-env

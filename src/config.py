@@ -108,6 +108,7 @@ class Config:
     face_tracking: bool
     max_source_height: int
     download_progress_seconds: float
+    merge_clips: bool
     yt_cookies_file: str
 
     @property
@@ -132,6 +133,7 @@ class Config:
             "FACE_TRACKING": self.face_tracking,
             "MAX_SOURCE_HEIGHT": self.max_source_height,
             "DOWNLOAD_PROGRESS_SECONDS": self.download_progress_seconds,
+            "MERGE_CLIPS": self.merge_clips,
             "YT_COOKIES_FILE": self.yt_cookies_file or "(kosong)",
         }
 
@@ -222,5 +224,6 @@ def load_config(env_path: str | Path | None = None) -> Config:
             os.getenv("DOWNLOAD_PROGRESS_SECONDS"), "DOWNLOAD_PROGRESS_SECONDS", 15.0
         ),
         yt_cookies_file=(os.getenv("YT_COOKIES_FILE", "") or "").strip(),
+        merge_clips=_parse_bool(os.getenv("MERGE_CLIPS"), "MERGE_CLIPS"),
     )
     return _validate(cfg)

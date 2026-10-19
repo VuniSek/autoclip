@@ -843,3 +843,55 @@
   - Regresi: `test_highlight` 7/7, `test_progress`, `test_bot_check`,
     `test_transcribe_cuda_fallback`, `test_cuda_diagnostics`, `test_model_gratis`,
     `test_env_writer` semuanya lulus.
+
+## F-027 | membuat P-027 (fitur gabung semua klip jadi satu video)
+- Perubahan (file dan apa yang diubah):
+  - `src/merger.py` (baru):
+    - `merge_clips(clips, out_path)`: menulis daftar file untuk demuxer `concat`
+      FFmpeg (path absolut, tanda kutip di-escape), lalu encode ulang:
+      `libx264` (preset veryfast, CRF 20) + `aac` 160k/48kHz, `-movflags +faststart`,
+      dengan filter `scale=1080:1920:force_original_aspect_ratio=decrease,
+      pad=1080:1920:(ow-iw)/2:(oh-ih)/2, setsar=1, fps=30, format=yuv420p`.
+      Encode ulang (bukan stream copy) dipakai supaya audio tetap sinkron dan
+      transisi antar klip mulus.
+    - `probe_streams()` (ffprobe) memeriksa hasil: **wajib** ada stream video DAN
+      audio; kalau tidak, `MergeError` dilempar.
+    - Tidak pernah menghapus klip individual; file daftar sementara dibersihkan di
+      blok `finally`.
+    - `MergeError` dengan pesan jelas: klip < 2, file tidak ditemukan, hasil kosong,
+      atau stream kurang.
+  - `src/config.py`: field `merge_clips` dari env `MERGE_CLIPS` (default false),
+    tampil di `public_summary()`.
+  - `main.py`:
+    - argumen `--merge` dan `--no-merge`, plus `resolve_merge()` (CLI menang atas
+      `.env`).
+    - `merged_file_name()` menghasilkan `00_<slug-video>_gabungan.mp4` dari nama
+      klip pertama.
+    - setelah semua klip selesai: penggabungan dijalankan; kalau gagal hanya
+      `[PERINGATAN]` + pesan, klip individual tetap utuh, dan program tetap exit 0
+      (klip utama tetap berguna).
+  - `autoclip_colab.py`: `MERGE_CLIPS` masuk `DEFAULTS` + `ENV_ORDER` (agar tidak
+    hilang saat `.env` ditulis ulang, pola P-023). File gabungan otomatis ikut
+    masuk ke salinan `--drive-dir` dan ke zip hasil karena `collect_outputs()`
+    mengambil semua `.mp4` di `output/`.
+  - `.env.example`: `MERGE_CLIPS=false`.
+  - `tests/test_merge.py` (baru, 6 bagian).
+- Alasan: permintaan pengguna adalah "satu file berisi semua klip". Yang penting
+  dijaga: (a) video & audio harus utuh dan sinkron -> encode ulang + verifikasi
+  ffprobe; (b) subtitle yang sudah tertanam di tiap klip harus tetap ada ->
+  re-encode mempertahankan gambar; (c) kegagalan tidak boleh menghapus klip
+  individual -> `merge_clips()` tidak pernah menghapus file sumber.
+- Hasil pengujian ulang:
+  - `tests/test_merge.py` lulus (6 bagian): 3 klip uji digabung -> video=True,
+    audio=True, 1080x1920, durasi 6,0s = total klip; 1 klip -> `MergeError`
+    "minimal 2 klip" dan klip tetap ada; klip hilang -> pesan "tidak ditemukan" dan
+    klip lain tetap ada; urutan klip berpengaruh (warna frame terakhir berbeda
+    kalau urutan dibalik); `merged_file_name()` -> `00_tesvideo_gabungan.mp4`.
+  - Alur penuh `main.py --merge` (file lokal + mock OpenRouter): 2 klip +
+    `00_testvideo-id_gabungan.mp4` (17,8 MB). ffprobe: h264 1080x1920 + aac,
+    durasi 65,08s = 35s + 30s. Subtitle masih terbakar di file gabungan
+    (frame t=2s: x=229..850, t=40s: x=192..888, keduanya di dalam frame).
+  - Jalur Colab: `autoclip_colab.py ... -- --merge` -> file gabungan muncul di
+    ringkasan, tersalin ke `--drive-dir`, dan ada di dalam zip
+    (`output/00_testvideo-id_gabungan.mp4`).
+  - Regresi: seluruh test lama lulus (lihat daftar di bagian F-026).

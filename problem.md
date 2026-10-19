@@ -753,3 +753,35 @@
   5. Test baru `tests/test_subtitles.py`: tidak ada overlap, maksimal 2 baris, lebar
      tiap baris <= area teks, header benar, dan render nyata diuji ke frame video.
 - Status: FIXED (lihat `fix.md` F-026)
+
+## P-027 | belum ada fitur menggabungkan semua klip jadi satu video
+- Waktu: 2026-10-19
+- File/langkah terkait: `main.py` (CLI + alur), `src/config.py` (kunci `.env`),
+  `autoclip_colab.py` (penulis `.env` + zip/Drive), modul baru `src/merger.py`
+- Pesan error / gejala (salin apa adanya, tanpa API key):
+  ```
+  # bukan error: permintaan fitur
+  # "setelah semua klip selesai, gabungkan semua .mp4 di output/ berurutan menjadi
+  #  satu file, misalnya output/00_<judulvideo>_gabungan.mp4"
+  ```
+- Dugaan penyebab / kebutuhan:
+  1. Program hanya menghasilkan klip terpisah; tidak ada cara mendapatkan satu file
+     berisi semua klip untuk diunggah ulang.
+  2. `.env` belum punya kunci `MERGE_CLIPS`, dan `ENV_ORDER` di runner Colab juga
+     belum memuatnya — kalau tidak dijaga, setting baru bisa hilang saat `.env`
+     ditulis ulang (pola yang sama seperti P-023).
+  3. Penggabungan harus aman: kalau klipnya cuma satu atau FFmpeg gagal, file klip
+     individual **tidak boleh** hilang, dan hasilnya harus diverifikasi (stream
+     video + audio) sebelum dianggap sukses.
+- Perbaikan (lihat `fix.md` F-027):
+  1. `src/merger.py`: `merge_clips()` memakai demuxer concat FFmpeg + encode ulang
+     (libx264 + aac, fps 30, skala/pad ke 1080x1920), memverifikasi hasilnya dengan
+     ffprobe (harus ada stream video DAN audio), dan tidak pernah menghapus klip.
+  2. `main.py`: `--merge` / `--no-merge`, plus langkah penggabungan setelah semua
+     klip selesai; file named `00_<slug>_gabungan.mp4`.
+  3. `src/config.py`: `MERGE_CLIPS` (default false) + tampilannya di
+     `public_summary()`.
+  4. `autoclip_colab.py`: `MERGE_CLIPS` masuk `DEFAULTS`/`ENV_ORDER`; file gabungan
+     otomatis ikut tersalin ke `--drive-dir` dan masuk zip hasil.
+  5. `tests/test_merge.py` (baru, 6 bagian).
+- Status: FIXED (lihat `fix.md` F-027)

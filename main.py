@@ -22,7 +22,7 @@ from src.config import (
     ConfigError,
     load_config,
 )
-from src import downloader, highlight, transcriber
+from src import downloader, highlight, merger, transcriber
 from src.clipper import ClipError, cut_clip
 from src.subtitles import SubtitleError, build_subtitles
 
@@ -103,6 +103,19 @@ def parse_args() -> argparse.Namespace:
         ),
     )
     p.add_argument(
+        "--merge",
+        action="store_true",
+        help=(
+            "Gabungkan semua klip jadi satu video (default dari .env MERGE_CLIPS). "
+            "Contoh: --merge"
+        ),
+    )
+    p.add_argument(
+        "--no-merge",
+        action="store_true",
+        help="Paksa tidak menggabungkan klip",
+    )
+    p.add_argument(
         "--env", default=None,
         help="Path file .env alternatif (default: .env di root proyek)",
     )
@@ -120,6 +133,15 @@ def resolve_face_tracking(args: argparse.Namespace, cfg: Config) -> bool:
     if args.face_tracking:
         return True
     return cfg.face_tracking
+
+
+def resolve_merge(args: argparse.Namespace, cfg: Config) -> bool:
+    """True kalau semua klip harus digabung jadi satu video."""
+    if args.no_merge:
+        return False
+    if args.merge:
+        return True
+    return cfg.merge_clips
 
 
 def process_one(
@@ -233,6 +255,19 @@ def process_one(
     return outputs
 
 
+def merged_file_name(clips: list[Path], fallback: str = "video") -> str:
+    """Nama file gabungan: `00_<slug-judul>_gabungan.mp4`."""
+    slug = fallback
+    if clips:
+        parts = clips[0].stem.split("_")
+        # nama klip: "<index>_<slug-video>_klip<no>_<slug-judul>"
+        if len(parts) >= 3 and parts[2].startswith("klip"):
+            slug = parts[1]
+        else:
+            slug = slugify(clips[0].stem)
+    return f"00_{slug}_gabungan.mp4"
+
+
 def main() -> int:
     args = parse_args()
 
@@ -300,6 +335,20 @@ def main() -> int:
         log(f"[ERROR TIDAK TERDUKUR] {exc}")
         traceback.print_exc()
         return 1
+
+    # --- penggabungan semua klip jadi satu video (opsional) ---
+    if resolve_merge(args, cfg):
+        log("\n=== [+] Menggabungkan semua klip jadi satu video ===")
+        try:
+            merged = merger.merge_clips(
+                all_outputs, OUTPUT_DIR / merged_file_name(all_outputs)
+            )
+            size_mb = merged.stat().st_size / 1_048_576
+            log(f"  gabungan : {merged.name} ({size_mb:.1f} MB)")
+            all_outputs.append(merged)
+        except merger.MergeError as exc:
+            log(f"[PERINGATAN] Penggabungan gagal: {exc}")
+            log("  Klip individual TIDAK dihapus dan tetap bisa dipakai di folder output/.")
 
     # --- ringkasan ---
     log(f"\n{'=' * 60}")

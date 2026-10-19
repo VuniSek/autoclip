@@ -62,6 +62,7 @@ Sisanya biarkan default dari `.env.example` (sudah cocok untuk kebanyakan kasus)
 | `YT_COOKIES_FILE` | (kosong) | isi `cookies.txt` hanya kalau YouTube meminta verifikasi bot |
 | `YT_PLAYER_CLIENTS` | `tv,tv_simply,ios,mweb` | player client yang dicoba saat verifikasi bot; tambah `android_vr`/`web_embedded` kalau masih ditolak |
 | `YT_JS_RUNTIMES` | (auto) | runtime JS untuk yt-dlp (`node`/`deno`); kosong = pakai yang ada, `none` = matikan |
+| `MERGE_CLIPS` | `false` | `true` = gabungkan semua klip jadi satu video (setara `--merge`) |
 
 ### Langkah 4 — Jalankan
 
@@ -97,6 +98,7 @@ output/
 | `--reuse-transcript` | pakai `temp/transcript.json`, lewati transkripsi (hemat waktu) |
 | `--progress-seconds N` | jarak antar baris progress unduhan (default 15 detik, `0` = hanya tiap 10%) |
 | `--cookies PATH` | kirim `cookies.txt` ke yt-dlp (hanya perlu kalau YouTube minta verifikasi bot) |
+| `--merge` / `--no-merge` | gabungkan semua klip jadi satu video `00_<judul>_gabungan.mp4` (default dari `.env` `MERGE_CLIPS`) |
 | `--keep-temp` | jangan bersihkan `temp/` |
 | `--verbose` | tampilkan konfigurasi (API key dimasker) |
 
@@ -111,6 +113,19 @@ venv/bin/python main.py \
   --reuse-transcript \
   --verbose
 ```
+
+### Gabungkan Semua Klip Jadi Satu Video
+
+```bash
+venv/bin/python main.py --input input/vidio-saya.mp4 --merge
+```
+
+Hasilnya ada di `output/00_<judulvideo>_gabungan.mp4`: semua klip disusun berurutan,
+di-encode ulang (H.264 + AAC, tetap 1080x1920, subtitle tetap tertanam), lalu
+dicek dengan ffprobe (harus ada stream video **dan** audio). Kalau hanya ada satu
+klip atau penggabungan gagal, program memberi pesan jelas dan **klip individual
+tidak dihapus**. Di Colab, teruskan lewat `-- --merge`; file gabungan ikut masuk
+ke zip hasil dan ke `--drive-dir`.
 
 ---
 
