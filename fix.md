@@ -743,3 +743,52 @@
   itu reputasi IP. Yang diperbaiki di sini adalah banyaknya jalur yang dicoba dan
   kejelasan petunjuk yang diberikan. Jalur yang benar-benar berhasil: `cookies.txt`
   (butuh akun) atau mengunduh manual lalu memakai file lokal.
+
+## F-025 | memperbaiki P-025 (runtime JS untuk yt-dlp + daftar client yang luas)
+- Perubahan (file dan apa yang diubah):
+  - `src/downloader.py`:
+    - `detect_js_runtimes()` menyalakan runtime JS yang tersedia (`node`, `deno`,
+      `bun`) lewat opts `js_runtimes`. Tanpa runtime JS, yt-dlp menyempitkan client
+      default YouTube ke `visionos` saja (`_DEFAULT_JSLESS_CLIENTS`) dan solver EJS
+      tidak aktif. Env `YT_JS_RUNTIMES` untuk memaksa (`auto`/`none`/`node,deno`).
+      Log baru: `[unduh] runtime JS: node (client default yt-dlp lengkap)`.
+    - `BOT_CHECK_FALLBACK_CLIENTS` = `("tv", "tv_simply", "ios", "mweb")`;
+      `EXTRA_CLIENT_EXAMPLES` = `("android_vr", "web_embedded")` untuk perintah manual.
+    - `build_extractor_args(player_client, skip_webpage=False)` memakai bentuk dict
+      YouTube yang benar:
+      `{"extractor_args": {"youtube": {"player_client": [...], "player_skip": [...]}}}`.
+      Bentuk lama `{"youtube": ["player_client=..."]}` **diabaikan yt-dlp** — bug yang
+      membuat retry berjalan dengan client default.
+    - Percobaan ulang memakai `player_client` **tanpa** `player_skip=webpage`, dan pesan
+      kesalahan memperingatkan bahwa opsi itu justru memicu verifikasi bot.
+  - `tests/test_bot_check.py`: skenario 2/3 menyesuaikan bentuk opts baru; skenario 8
+    baru untuk `detect_js_runtimes()` (auto/none/paksa) dan `skip_webpage`.
+  - `.env.example` + `README.md`: `YT_JS_RUNTIMES` dan pembaruan baris troubleshooting.
+- Alasan: pengguna melaporkan unduhan yang tadinya berhasil kini kena verifikasi bot.
+  Pemeriksaan `git diff` membuktikan **permintaan pertama tidak berubah** oleh kode
+  kita, jadi penyebabnya lingkungan: yt-dlp terbaru (2026.8.19) + tidak adanya runtime
+  JS di Colab (hanya `deno` yang aktif bawaan) sehingga client default menyempit,
+  dan/atau reputasi IP runtime tersebut. Hipotesis awal (`player_skip=webpage`) dicoba
+  lalu **dibantah bukti lapangan** (lihat hasil pengujian) dan dibuang.
+- Hasil pengujian ulang (uji ke YouTube sungguhan dari mesin ini, video Big Buck Bunny):
+  ```
+  [OK ] default + node                                   -> judul terbaca, 53 format
+  [OK ] default tanpa runtime JS                          -> judul terbaca, 53 format
+  [OK ] player_client=tv / tv_simply / ios / mweb          -> OK
+  [OK ] player_client=android_vr / web_embedded / web_safari / visionos -> OK
+  [GAGAL] player_client=tv + player_skip=webpage           -> BOT-CHECK
+  [GAGAL] player_client=android_vr + player_skip=webpage   -> BOT-CHECK
+  ```
+  - Unduhan penuh memakai program kita: **BERHASIL** — `source.mp4`, 1280x720,
+    635 detik, 81,6 MB, progress hook bekerja, log `runtime JS: node`.
+  - `tests/test_bot_check.py` lulus (8 skenario): bentuk `extractor_args` benar,
+    `detect_js_runtimes()` menghormati `auto`/`none`/`deno`, daftar client env
+    bekerja, pesan galat menyebut semua client yang dicoba.
+  - Regresi: `py_compile`, `test_highlight` 7/7, `test_progress`,
+    `test_transcribe_cuda_fallback`, `test_cuda_diagnostics`, `test_model_gratis`,
+    `test_env_writer` lulus; alur penuh `main.py` (file lokal + mock OpenRouter)
+    menghasilkan 2 klip, exit 0.
+- Catatan: ini **bukan** perbaikan untuk IP yang sudah diblokir. Kalau IP Colab-nya
+  ditandai, tidak ada kode yang akan mengatasinya — yang perlu: `cookies.txt`, file
+  lokal, atau runtime dengan IP lain (Colab baru / VPN). Yang bisa diperbaiki program
+  adalah mencoba lebih banyak client dan memberi petunjuk yang benar.

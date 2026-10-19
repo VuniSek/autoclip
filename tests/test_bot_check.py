@@ -135,7 +135,7 @@ def main() -> int:
         if len(calls) != 2:
             failures.append(f"harus 2 percobaan (default + 1 client), dapat {len(calls)}")
         # Tiap client dicoba SATU-SATU (bukan tv,ios digabung) - P-024
-        if calls[1].get("extractor_args") != {"youtube": ["player_client=tv"]}:
+        if calls[1].get("extractor_args") != {"youtube": {"player_client": ["player_client=tv"]}}:
             failures.append(f"extractor_args retry salah: {calls[1].get('extractor_args')}")
         if not meta or meta["title"] != "Big Buck Bunny":
             failures.append("unduhan sukses tidak mengembalikan metadata judul")
@@ -247,17 +247,49 @@ def main() -> int:
     if downloader.build_extractor_args(None) != {}:
         failures.append("player_client None harus menghasilkan opts kosong")
     if downloader.build_extractor_args("tv") != {
-        "extractor_args": {"youtube": ["player_client=tv"]}
+        "extractor_args": {"youtube": {"player_client": ["player_client=tv"]}}
     }:
-        failures.append("player_client tunggal salah")
+        failures.append(f"player_client tunggal salah: {downloader.build_extractor_args('tv')}")
     gabungan = ",".join(downloader.BOT_CHECK_FALLBACK_CLIENTS)
     if downloader.build_extractor_args(downloader.BOT_CHECK_FALLBACK_CLIENTS) != {
-        "extractor_args": {"youtube": ["player_client=" + gabungan]}
+        "extractor_args": {"youtube": {"player_client": ["player_client=" + gabungan]}}
     }:
         failures.append("gabungan player client salah")
     # Key top-level "youtube" diabaikan yt-dlp -> harus berada di extractor_args
     if "youtube" in downloader.build_extractor_args("tv"):
         failures.append("player client harus di dalam extractor_args, bukan key top-level")
+    # player_skip=webpage justru memicu bot check (P-025) -> jangan dipakai di retry
+    if downloader.build_extractor_args("tv", skip_webpage=True) != {
+        "extractor_args": {
+            "youtube": {"player_client": ["player_client=tv"], "player_skip": ["webpage"]}
+        }
+    }:
+        failures.append("skip_webpage tidak producing opts yang benar")
+
+    print("\n[8] runtime JS untuk yt-dlp (P-025)")
+    import os
+
+    asli_js = os.environ.get("YT_JS_RUNTIMES")
+    try:
+        os.environ["YT_JS_RUNTIMES"] = "none"
+        if downloader.detect_js_runtimes() != {}:
+            failures.append("YT_JS_RUNTIMES=none harus mematikan runtime JS")
+        os.environ["YT_JS_RUNTIMES"] = "auto"
+        runtimes = downloader.detect_js_runtimes()
+        print(f"  auto -> {sorted(runtimes)}")
+        for nama in runtimes:
+            if nama not in ("deno", "node", "bun"):
+                failures.append(f"runtime JS tak dikenal: {nama}")
+        os.environ["YT_JS_RUNTIMES"] = "deno"
+        hanya_deno = downloader.detect_js_runtimes()
+        print(f"  paksa deno -> {sorted(hanya_deno)}")
+        if any(k != "deno" for k in hanya_deno):
+            failures.append(f"YT_JS_RUNTIMES=deno harus hanya deno: {sorted(hanya_deno)}")
+    finally:
+        if asli_js is None:
+            os.environ.pop("YT_JS_RUNTIMES", None)
+        else:
+            os.environ["YT_JS_RUNTIMES"] = asli_js
     print("  extractor_args: None/tv/tuple -> kosong, tv, tv,ios")
 
     print("\n[7] File lokal tidak terpengaruh")

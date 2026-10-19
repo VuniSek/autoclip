@@ -609,3 +609,78 @@
   3. `BOT_CHECK_FALLBACK_CLIENTS` dapat dikonfigurasi lewat env `YT_PLAYER_CLIENTS`
      (mis. `tv,ios,web_safari,mweb`) tanpa mengubah kode.
 - Status: FIXED (lihat `fix.md` F-024)
+
+## P-025 | unduhan yang dulu berhasil kini kena verifikasi bot (regresi lingkungan, bukan kode)
+- Waktu: 2026-10-19
+- File/langkah terkait: `src/downloader.py` -> `build_ydl_opts()`/opts yt-dlp
+  (`js_runtimes`, `extractor_args`), `requirements.txt` (`yt-dlp>=2025.1.1`)
+- Pesan error / gejala (salin apa adanya, tanpa API key):
+  ```
+  ERROR: [youtube] dE3ReotqynY: Sign in to confirm you’re not a bot. Use --cookies-from-browser or --cookies for the authentication.
+    [unduh] YouTube meminta verifikasi bot (IP ini ditandai).
+    [unduh] mencoba ulang dengan player client: tv
+  ERROR: [youtube] dE3ReotqynY: Sign in to confirm you’re not a bot. ...
+  ```
+  Keluhan pengguna: "sebelumnya tanpa gitu bisa, 2 atau 1 versi sebelum perubahan terakhir".
+- Pemeriksaan apakah kode saya penyebabnya (jawaban: **bukan**):
+  ```
+  $ git diff e8a9caa..HEAD -- src/downloader.py | grep -E 'format|outtmpl|merge_output|quiet|noprogress|retries|socket|cookiefile'
+  # tidak ada perubahan pada permintaan unduhan pertama
+  ```
+  Opsi permintaan pertama (format, outtmpl, merge, quiet, retries, socket_timeout,
+  cookiefile) **identik** dengan versi sebelum F-016. Semua perubahan saya hanya menambah
+  percobaan SETELAH bot check terjadi, jadi tidak mungkin menyebabkan permintaan
+  pertama ditolak.
+- Temuan dari kode yt-dlp yang terpasang (2026.8.19):
+  ```
+  _DEFAULT_CLIENTS        = ('visionos', 'web')
+  _DEFAULT_JSLESS_CLIENTS = ('visionos',)
+  self.params['js_runtimes'] = self.params.get('js_runtimes', {'deno': {}})
+  # hanya 'deno' yang aktif secara bawaan; node/bun/quickjs harus diaktifkan manual
+  # yt-dlp sendiri memakai kombinasi ini untuk video uji YouTube-nya:
+  'extractor_args': {'youtube': {'player_client': ['ios'], 'player_skip': ['webpage']}}
+  ```
+- Dugaan penyebab (sangat mungkin, belum 100% terverifikasi di Colab):
+  1. `requirements.txt` memakai `yt-dlp>=2025.1.1` **tanpa batas atas**, jadi setiap
+     runtime Colab baru memasang yt-dlp terbaru (2026.8.19). Perilaku default client
+     YouTube berubah beberapa kali dalam 2025-2026.
+  2. Hanya `deno` yang aktif secara bawaan, sedangkan Colab **tidak punya deno**
+     (tapi punya Node.js v20). Tanpa runtime JS, yt-dlp menyempitkan client default
+     ke `visionos` saja (`_DEFAULT_JSLESS_CLIENTS`), yaitu client yang paling sering
+     kena verifikasi bot.
+  3. Permintaan *watch page* (HTML) adalah pemicu umum verifikasi bot. yt-dlp
+     sendiri menghindari ini dengan `player_skip=webpage`. Hipotesis ini sempat
+     dicoba, lalu dibantah oleh bukti lapangan (lihat di bawah).
+- Bukti lapangan (diuji langsung ke YouTube dari mesin ini, video Big Buck Bunny):
+  ```
+  [OK ] default + node                                  -> judul terbaca, 53 format
+  [OK ] default tanpa runtime JS                         -> judul terbaca, 53 format
+  [OK ] player_client=tv          (tanpa skip webpage)  -> OK
+  [OK ] player_client=tv_simply   (tanpa skip webpage)  -> OK
+  [OK ] player_client=ios          (tanpa skip webpage)  -> OK
+  [OK ] player_client=mweb         (tanpa skip webpage)  -> OK
+  [OK ] player_client=android_vr   (tanpa skip webpage)  -> OK
+  [OK ] player_client=web_embedded (tanpa skip webpage)  -> OK
+  [OK ] player_client=web_safari   (tanpa skip webpage)  -> OK
+  [OK ] player_client=visionos     (tanpa skip webpage)  -> OK
+  [GAGAL] player_client=tv         + player_skip=webpage -> BOT-CHECK
+  [GAGAL] player_client=android_vr + player_skip=webpage -> BOT-CHECK
+  ```
+  Kesimpulan: hipotesis butir 3 **SALAH** untuk kasus kita. `player_skip=webpage`
+  justru memicu verifikasi bot (tanpa data halaman watch, client butuh PO token).
+  Yang benar: memaksa `player_client` **tanpa** `player_skip`.
+  Unduhan penuh dengan program kita juga berhasil: `source.mp4`, 1280x720, 635 detik,
+  81,6 MB, dengan log `runtime JS: node`.
+- Kesimpulan akhir: program kita sehat (terbukti unduhan nyata sukses). Kegagalan di
+  Colab adalah **reputasi IP** runtime tersebut, bukan regresi kode. Perbaikan yang
+  tetap berguna: menyalakan runtime JS (client default tidak menyempit) dan memberi
+  daftar client yang luas untuk dicoba.
+- Perbaikan (lihat `fix.md` F-025):
+  1. `detect_js_runtimes()` menyalakan runtime JS yang tersedia (`node`, `deno`, `bun`)
+     lewat opts `js_runtimes`, sehingga client default yt-dlp tidak menyempit ke
+     `visionos` dan solver EJS ikut aktif (env `YT_JS_RUNTIMES` untuk mengoverride).
+  2. Percobaan ulang memakai `player_client=<client>` **tanpa** `player_skip=webpage`
+     (berdasarkan matriks bukti di atas), dengan daftar client
+     `tv`, `tv_simply`, `ios`, `mweb` (dapat diatur lewat `YT_PLAYER_CLIENTS`).
+  3. Pesan kesalahan menjelaskan bahwa `player_skip=webpage` **tidak boleh** dipakai.
+- Status: FIXED (lihat `fix.md` F-025)

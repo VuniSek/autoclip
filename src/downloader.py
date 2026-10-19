@@ -129,10 +129,10 @@ def make_progress_hook(every: float = PROGRESS_INTERVAL, step: float = PROGRESS_
 # Client ini tidak butuh login, jadi sering lolos dari "Sign in to confirm you're
 # not a bot" (lihat problem.md P-016). Dicoba SATU-SATU, bukan digabung, supaya
 # jelas client mana yang ditolak dan mana yang masih layak dicoba (P-024).
-BOT_CHECK_FALLBACK_CLIENTS = ("tv", "ios", "web_safari")
+BOT_CHECK_FALLBACK_CLIENTS = ("tv", "tv_simply", "ios", "mweb")
 
 # Client lain yang sering dicoba manual; dipakai untuk memberi perintah siap tempel.
-EXTRA_CLIENT_EXAMPLES = ("mweb", "android_vr", "tv_simply")
+EXTRA_CLIENT_EXAMPLES = ("android_vr", "web_embedded")
 
 
 class BotCheckError(DownloadError):
@@ -179,6 +179,10 @@ def bot_check_help(
                 f"      yt-dlp --extractor-args \"youtube:player_client={client}\" "
                 f"-f \"bv*+ba/b[height<=720]\" -o \"source.%(ext)s\" \"{source}\""
             )
+        lines.append(
+            "    (jangan tambahkan player_skip=webpage: tanpa data halaman watch, "
+            "client butuh PO token lalu kena verifikasi bot)"
+        )
     if cookies:
         lines.append(
             f"  - Cookie sudah dipakai ({cookies}) tapi tetap ditolak -> IP memang diblokir."
@@ -215,6 +219,31 @@ def resolve_cookies(cookies: str | Path | None) -> Path | None:
     return path.resolve()
 
 
+def detect_js_runtimes() -> dict:
+    """Aktifkan runtime JavaScript yang tersedia untuk yt-dlp.
+
+    yt-dlp hanya menyalakan `deno` secara bawaan. Tanpa runtime JS, client default
+    YouTube menyempit jadi `visionos` saja (`_DEFAULT_JSLESS_CLIENTS`) dan
+    YouTube lebih sering meminta verifikasi bot. Colab tidak punya deno, tapi punya
+    Node.js, jadi kita menyalakannya sendiri (lihat problem.md P-025).
+
+    Env `YT_JS_RUNTIMES` untuk memaksa: `auto` (default), `none`, atau
+    `node,deno`.
+    """
+    import os
+
+    raw = (os.getenv("YT_JS_RUNTIMES") or "").strip().lower()
+    if raw == "none":
+        return {}
+    tersedia: dict[str, dict] = {}
+    for nama in ("deno", "node", "bun"):
+        if shutil.which(nama):
+            tersedia[nama] = {}
+    if raw and raw != "auto":
+        return {k: v for k, v in tersedia.items() if k in raw.split(",")}
+    return tersedia
+
+
 def fallback_clients() -> list[str]:
     """Daftar player client yang dicoba saat bot check.
 
@@ -244,21 +273,35 @@ def build_format(max_height: int | None = None) -> str:
     return f"bv*[height<={h}]+ba/b[height<={h}]/bv*+ba/best"
 
 
-def build_extractor_args(player_client: str | list[str] | tuple[str, ...] | None) -> dict:
+def build_extractor_args(
+    player_client: str | list[str] | tuple[str, ...] | None,
+    skip_webpage: bool = False,
+) -> dict:
     """Fragmen `opts` yt-dlp untuk memaksa player client tertentu (opsional).
 
     PENTING: hasilnya harus disisipkan sebagai `opts["extractor_args"]`, bukan
     `opts["youtube"]` — yt-dlp mengabaikan key top-level `youtube` (lihat
     problem.md P-024 dan fix.md F-016). Karena itu fungsi ini mengembalikan fragmen
     opts lengkap supaya tidak bisa salah pasang.
+
+    `skip_webpage=True` menambahkan `player_skip=webpage`: melewati pengambilan
+    halaman watch, yang justru pemicu umum verifikasi bot. yt-dlp sendiri memakai
+    kombinasi `player_client` + `player_skip=webpage` untuk video uji YouTube-nya
+    (lihat problem.md P-025).
     """
-    if not player_client:
+    if not player_client and not skip_webpage:
         return {}
-    clients = [player_client] if isinstance(player_client, str) else list(player_client)
-    joined = ",".join(c.strip() for c in clients if str(c).strip())
-    if not joined:
+    args: dict[str, list[str]] = {}
+    if player_client:
+        clients = [player_client] if isinstance(player_client, str) else list(player_client)
+        joined = ",".join(c.strip() for c in clients if str(c).strip())
+        if joined:
+            args["player_client"] = ["player_client=" + joined]
+    if skip_webpage:
+        args["player_skip"] = ["webpage"]
+    if not args:
         return {}
-    return {"extractor_args": {"youtube": ["player_client=" + joined]}}
+    return {"extractor_args": {"youtube": args}}
 
 
 def download(
@@ -334,8 +377,20 @@ def download(
     # yt-dlp membaca player client dari opts["extractor_args"]["youtube"], BUKAN
     # dari key top-level "youtube".
     opts.update(extractor_opts)
+    # Nyalakan runtime JS yang ada (node/deno). Tanpa ini yt-dlp menyempitkan
+    # client default YouTube ke `visionos` dan verifikasi bot jadi lebih sering
+    # (lihat problem.md P-025).
+    js_runtimes = detect_js_runtimes()
+    if js_runtimes:
+        opts["js_runtimes"] = js_runtimes
     print(f"  [unduh] mulai: {source}", flush=True)
     print(f"  [unduh] format: {fmt}", flush=True)
+    if js_runtimes:
+        print(
+            "  [unduh] runtime JS: " + ", ".join(sorted(js_runtimes))
+            + " (client default yt-dlp lengkap)",
+            flush=True,
+        )
     if cookie_opts:
         detail = cookie_opts.get("cookiefile") or f"browser={cookie_opts['cookiesfrombrowser']}"
         print(f"  [unduh] cookie: {detail}", flush=True)
@@ -385,8 +440,14 @@ def download(
         galat_terakhir: Exception | None = None
         for client in clients:
             dicoba.append(client)
-            print(f"  [unduh] mencoba ulang dengan player client: {client}", flush=True)
+            print(
+                f"  [unduh] mencoba ulang dengan player client: {client}",
+                flush=True,
+            )
             retry_opts = dict(opts)
+            # TANPA `player_skip=webpage`: tanpa data halaman watch, client
+            # butuh PO token dan justru kena verifikasi bot (diuji langsung ke
+            # YouTube, lihat problem.md P-025).
             retry_opts.update(build_extractor_args(client))
             try:
                 info, path = fetch(retry_opts)
