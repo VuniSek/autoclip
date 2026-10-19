@@ -800,10 +800,22 @@ PLACEHOLDERS = {
     "changeme", "your_api_key_here", "your_model_here",
 }
 
+# Router OpenRouter yang hanya meneruskan ke model gratis (lihat problem.md P-022).
+# Salinan dari `FREE_ROUTER_MODELS` di src/config.py supaya runner Colab tetap bisa
+# jalan sendiri; `tests/test_model_gratis.py` menjaga keduanya tetap sama.
+COLAB_FREE_ROUTERS = frozenset({"openrouter/free"})
+
+
+def colab_model_is_free(model: str) -> bool:
+    """Sufiks ':free' ATAU router gratis (lihat src/config.py::model_is_free)."""
+    name = (model or "").strip().lower()
+    return ":free" in name or name in COLAB_FREE_ROUTERS
+
 ENV_ORDER = (
     "OPENROUTER_API_KEY", "OPENROUTER_MODEL", "OPENROUTER_BASE_URL",
     "WHISPER_MODEL", "WHISPER_DEVICE", "WHISPER_COMPUTE_TYPE",
     "CLIP_MIN_SECONDS", "CLIP_MAX_SECONDS", "MAX_CLIPS", "LANGUAGE", "FACE_TRACKING",
+    "MAX_SOURCE_HEIGHT", "DOWNLOAD_PROGRESS_SECONDS", "YT_COOKIES_FILE",
 )
 
 DEFAULTS = {
@@ -816,6 +828,11 @@ DEFAULTS = {
     "MAX_CLIPS": "5",
     "LANGUAGE": "id",
     "FACE_TRACKING": "false",
+    # Kunci tambahan: harus sama dengan yang dibaca src/config.py, kalau tidak
+    # nilainya hilang setiap kali `.env` ditulis ulang (lihat problem.md P-023).
+    "MAX_SOURCE_HEIGHT": "1080",
+    "DOWNLOAD_PROGRESS_SECONDS": "15",
+    "YT_COOKIES_FILE": "",
 }
 
 
@@ -889,12 +906,15 @@ def resolve_env(project: Path, args: argparse.Namespace, gpu: bool) -> Path:
             "  Pilih satu model GRATIS dari https://openrouter.ai/models?max_price=0\n"
             "  lalu jalankan ulang, mis.: --model google/gemini-2.0-flash-exp:free"
         )
-    if ":free" not in model.lower():
-        # Aturan sama dengan src/config.py: blokir keras model berbayar.
+    if not colab_model_is_free(model):
+        # Aturan sama dengan src/config.py: blokir keras model berbayar
+        # (lihat problem.md P-010), router gratis tetap boleh (P-022).
         die(
             f"OPENROUTER_MODEL='{model}' tidak berakhiran ':free'.\n"
-            "  Proyek ini hanya mengizinkan model GRATIS. Daftar model gratis:\n"
-            "  https://openrouter.ai/models?max_price=0"
+            "  Proyek ini hanya mengizinkan model GRATIS. Pilih salah satu:\n"
+            f"  - router gratis yang otomatis pilih model free: {', '.join(sorted(COLAB_FREE_ROUTERS))}\n"
+            "  - model gratis spesifik dari https://openrouter.ai/models?max_price=0\n"
+            "    (mis. --model google/gemini-2.0-flash-exp:free)"
         )
 
     # .env sudah benar untuk device yang sekarang dipakai -> jangan tulis ulang.
@@ -926,6 +946,11 @@ def resolve_env(project: Path, args: argparse.Namespace, gpu: bool) -> Path:
     text = "# .env untuk AUTO CLIP (dibuat oleh autoclip_colab.py)\n"
     for key in ENV_ORDER:
         text += f"{key}={values.get(key, DEFAULTS.get(key, ''))}\n"
+    # Kunci milik pengguna yang tidak dikenal program tetap ditulis, jangan dibuang
+    # (lihat problem.md P-023).
+    for key in values:
+        if key not in ENV_ORDER:
+            text += f"{key}={values[key]}\n"
     path.write_text(text, encoding="utf-8")
     try:
         path.chmod(0o600)

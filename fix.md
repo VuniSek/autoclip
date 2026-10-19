@@ -637,3 +637,64 @@
   tidak punya GPU. Jalankan `--check-env` di Colab setelah `git pull`; baris
   "TIDAK ADA di folder mana pun" + "yang terpasang hanya versi lain" akan langsung
   menunjukkan apakah penyebabnya wheel CUDA 13 yang menutupi wheel CUDA 12.
+
+## F-022 | memperbaiki P-022 (`openrouter/free` dianggap model berbayar)
+- Perubahan (file dan apa yang diubah):
+  - `src/config.py`: konstanta `FREE_ROUTER_MODELS = frozenset({"openrouter/free"})` +
+    helper `model_is_free(model)` (sufiks `:free` **atau** router gratis);
+    `_validate()` memakai helper itu, jadi aturan "blokir keras model berbayar"
+    (P-010) tetap berlaku untuk model berbayar biasa.
+  - `autoclip_colab.py`: `COLAB_FREE_ROUTERS` + `colab_model_is_free()` (salin dari
+    `src/config.py` supaya runner Colab tetap bisa jalan sendiri) dipakai di
+    `resolve_env()`. Pesan penolakan kini menyebut alternatif yang bisa langsung
+    dipakai: router gratis `openrouter/free` atau model `:free` spesifik.
+  - `tests/test_model_gratis.py` (baru, 3 bagian): 6 model gratis diterima, 5 model
+    berbayar ditolak, keputusan `src/config.py` dan runner Colab identik untuk 11 model.
+- Alasan: `openrouter/free` adalah router OpenRouter yang **hanya** meneruskan ke
+  varian gratis, jadi tidak memakai kuota berbayar. Aturan lama hanya mengecek sufiks
+  `:free`, sehingga model yang paling aman justru ditolak dan program berhenti sebelum
+  pipeline jalan. Kuota berbayar tetap mustahil dipakai karena model biasa tanpa
+  `:free` masih ditolak.
+- Hasil pengujian ulang:
+  - `tests/test_model_gratis.py` lulus: `model_is_free()` benar untuk
+    `google/gemini-2.0-flash-exp:free`, `openrouter/free`, `OpenRouter/Free`,
+    `  openrouter/free  ` (spasi + huruf besar) -> True; `openai/gpt-4o`,
+    `anthropic/claude-sonnet-4`, `google/gemini-2.0-flash-exp`, `deepseek/deepseek-chat`,
+    `""` -> False.
+  - `load_config()` menerima keenam model gratis dan menolak kelima model berbayar
+    dengan pesan yang menyebut aturan `:free`.
+  - `autoclip_colab.py --check-env --model openrouter/free` -> "model gratis, valid";
+    `--model openai/gpt-4o` -> berhenti dengan pesan yang menyebut router gratis dan
+    model `:free` sebagai alternatif.
+  - Regresi: `py_compile`, `test_highlight` 7/7, `test_progress`, `test_bot_check`,
+    `test_transcribe_cuda_fallback`, `test_cuda_diagnostics` lulus.
+
+## F-023 | memperbaiki P-023 (penulis `.env` membuang kunci pengguna)
+- Perubahan (file dan apa yang diubah):
+  - `autoclip_colab.py`:
+    - `DEFAULTS` dilengkapi `MAX_SOURCE_HEIGHT=1080`, `DOWNLOAD_PROGRESS_SECONDS=15`,
+      `YT_COOKIES_FILE=` (kunci yang dibaca `src/config.py` tapi tidak ada di
+      `DEFAULTS`).
+    - `ENV_ORDER` ditambah tiga kunci yang sama, jadi urutannya sama dengan
+      `.env.example`.
+    - Penulis `.env` menulis ulang **semua** kunci milik pengguna yang tidak dikenal
+      program (yang tidak ada di `ENV_ORDER`), tidak membuangnya.
+  - `tests/test_env_writer.py` (baru, 4 bagian): kunci pengguna tetap utuh, semua
+    kunci `src/config.py` ada di `ENV_ORDER`, device mengikuti status GPU, model router
+    gratis ditulis apa adanya.
+- Alasan: `resolve_env()` menulis ulang `.env` setiap kali runner dijalankan, dan
+  seluruh kunci di luar `ENV_ORDER` hilang seketika. Akibat yang nyata: nilai
+  `MAX_SOURCE_HEIGHT=720` yang dirapikan pengguna kembali ke 1080p tanpa jejak.
+  Pelajaran F-009/F-016: perubahan pada file milik pengguna harus terlihat dan tidak
+  boleh menghapus apa pun yang tidak diketahui program.
+- Hasil pengujian ulang:
+  - `tests/test_env_writer.py` lulus: `MAX_SOURCE_HEIGHT=720`,
+    `DOWNLOAD_PROGRESS_SECONDS=30`, `YT_COOKIES_FILE=/tmp/cookies.txt`, dan kunci
+    buatan `MY_CUSTOM_KEY` semuanya tetap tertulis utuh; `gpu=True` -> device=cuda,
+    compute=float16; `gpu=False` -> device=cpu; `openrouter/free` tersimpan apa adanya.
+  - `src/config.py` punya 14 kunci, `ENV_ORDER` runner juga 14 (tidak ada yang kurang).
+  - File `.env` lokal dikembalikan ke keadaan semula (model
+    `google/gemma-4-31b-it:free`, device `auto`) setelah uji `--model` menimpanya;
+    `load_config()` membacanya normal: model, `max_source_height=1080`,
+    `download_progress_seconds=15`, `yt_cookies_file=''`.
+  - Regresi: seluruh uji lain lulus, `py_compile` OK.

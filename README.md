@@ -43,6 +43,7 @@ OPENROUTER_MODEL=google/gemini-2.0-flash-exp:free
 
 - API key gratis: <https://openrouter.ai/keys>
 - Nama model **wajib berakhiran `:free`**: <https://openrouter.ai/models?max_price=0>
+  (router `openrouter/free` juga boleh — dia otomatis memilih model gratis)
 
 Kalau masih placeholder atau modelnya bukan `:free`, program berhenti dengan pesan error.
 Itu disengaja supaya kuota berbayar tidak kepakai tanpa disadari.

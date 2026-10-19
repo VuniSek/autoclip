@@ -518,3 +518,61 @@
   !python autoclip_colab.py --check-env
   ```
 - Status: OPEN
+
+## P-022 | model `openrouter/free` ditolak padahal gratis
+- Waktu: 2026-10-18
+- File/langkah terkait: `autoclip_colab.py` -> `resolve_env()` (pengecekan `:free`)
+  dan `src/config.py` -> `_validate()`
+- Pesan error / gejala (salin apa adanya, tanpa API key):
+  ```
+  [colab] GAGAL: OPENROUTER_MODEL='openrouter/free' tidak berakhiran ':free'.
+    Proyek ini hanya mengizinkan model GRATIS. Daftar model gratis:
+    https://openrouter.ai/models?max_price=0
+  ```
+  Program berhenti sebelum pipeline jalan sama sekali.
+- Dugaan penyebab:
+  1. Aturan proyek (P-010) hanya menguji sufiks `:free`. `openrouter/free` adalah
+     **router** OpenRouter yang memang hanya meneruskan ke varian gratis, jadi ia
+     tidak memakai kuota berbayar meski tidak berakhiran `:free`. Cek sufiks saja
+     membuat model yang paling aman justru tertolak.
+  2. Pesan error tidak memberi alternatif yang bisa langsung dipakai, jadi pengguna
+     hanya melihat "tidak berakhiran ':free'" tanpa pilihan lain.
+  3. Pengecekan ada di dua tempat (`autoclip_colab.py` dan `src/config.py`) sehingga
+     perbaikannya harus dilakukan dua kali agar tidak berbeda perilaku.
+- Perbaikan (lihat `fix.md` F-022): `src/config.py` menyimpan
+  `FREE_ROUTER_MODELS = {"openrouter/free"}` + helper `model_is_free()`; kedua tempat
+  memakainya, dan pesan error kini menyarankan model gratis yang valid.
+- Status: FIXED (lihat `fix.md` F-022)
+
+## P-023 | penulisan `.env` di Colab membuang kunci yang tidak ada di `ENV_ORDER`
+- Waktu: 2026-10-19
+- File/langkah terkait: `autoclip_colab.py` -> `resolve_env()` (blok penulisan
+  `.env`) + `ENV_ORDER`
+- Pesan error / gejala (salin apa adanya, tanpa API key):
+  ```
+  # .env SEBELUM (13 baris, hasil salinan .env.example):
+  OPENROUTER_API_KEY=...
+  OPENROUTER_MODEL=...
+  ...
+  MAX_SOURCE_HEIGHT=1080
+  DOWNLOAD_PROGRESS_SECONDS=15
+  YT_COOKIES_FILE=
+
+  # .env SESUDAH ditulis autoclip_colab.py (12 baris):
+  # .env untuk AUTO CLIP (dibuat oleh autoclip_colab.py)
+  OPENROUTER_API_KEY=...
+  ...
+  FACE_TRACKING=false
+  # -> MAX_SOURCE_HEIGHT, DOWNLOAD_PROGRESS_SECONDS, YT_COOKIES_FILE HILANG
+  ```
+- Dugaan penyebab: `ENV_ORDER` hanya berisi 11 kunci (dari `OPENROUTER_API_KEY` sampai
+  `FACE_TRACKING`), sedangkan `.env.example` (dan `src/config.py`) sudah punya 3 kunci
+  tambahan: `MAX_SOURCE_HEIGHT`, `DOWNLOAD_PROGRESS_SECONDS`, `YT_COOKIES_FILE`.
+  Penulis `.env` hanya menulis kunci yang ada di `ENV_ORDER`, jadi nilai pengguna di
+  kunci lain **dihapus tanpa jejak** setiap kali runner menulis ulang `.env`.
+  Akibatnya, mis. `MAX_SOURCE_HEIGHT=720` yang dirapikan pengguna hilang dan unduhan
+  kembali ke 1080p.
+- Perbaikan (lihat `fix.md` F-023): `ENV_ORDER` dilengkapi dengan semua kunci yang
+  dipakai `src/config.py`, dan penulis `.env` mempertahankan kunci tambahan milik
+  pengguna (yang tidak dikenal program) alih-alih membuangnya.
+- Status: FIXED (lihat `fix.md` F-023)

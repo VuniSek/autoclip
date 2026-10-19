@@ -40,6 +40,18 @@ class ConfigError(RuntimeError):
     """Konfigurasi .env tidak valid / belum diisi."""
 
 
+# Model gratis yang tidak berakhiran ':free' tetapi tetap gratis: router OpenRouter
+# yang hanya meneruskan ke varian gratis. Model seperti ini tidak memakai kuota
+# berbayar, jadi tetap diizinkan (lihat problem.md P-022).
+FREE_ROUTER_MODELS = frozenset({"openrouter/free"})
+
+
+def model_is_free(model: str) -> bool:
+    """True kalau model dipastikan gratis: sufiks ':free' atau router gratis."""
+    name = (model or "").strip().lower()
+    return ":free" in name or name in FREE_ROUTER_MODELS
+
+
 def _mask(value: str) -> str:
     """Tampilkan key dalam bentuk tersamar. JANGAN pernah print key mentah."""
     v = (value or "").strip()
@@ -145,7 +157,7 @@ def _validate(cfg: Config) -> Config:
     # Penegakan model gratis: BLOKIR KERAS. Proyek ini hanya mengizinkan model gratis,
     # jadi model tanpa akhiran ':free' harus menghentikan program, bukan sekadar
     # memberi peringatan (lihat problem.md P-010).
-    if ":free" not in cfg.openrouter_model.lower():
+    if not model_is_free(cfg.openrouter_model):
         raise ConfigError(
             f"OPENROUTER_MODEL='{cfg.openrouter_model}' tidak berakhiran ':free'.\n"
             "Proyek ini hanya mengizinkan model GRATIS. Ganti nilainya di .env dengan "

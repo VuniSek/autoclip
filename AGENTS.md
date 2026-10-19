@@ -96,6 +96,9 @@ autoclip/
 - **Blokir keras model berbayar:** jika `OPENROUTER_MODEL` tidak berakhiran `:free`,
   program **WAJIB** berhenti dengan pesan error — bukan hanya memberi peringatan.
   Proyek ini hanya mengizinkan model gratis (lihat `problem.md` P-010 / `fix.md` F-010).
+  Pengecekan dilakukan lewat `src/config.py::model_is_free()` (helper yang juga
+  menerima router gratis `openrouter/free`, lihat P-022) — jangan lagi mengecek
+  sufiks `:free` secara terpisah di tempat lain, karena aturannya bisa berbeda.
   Daftar model gratis: `https://openrouter.ai/models?max_price=0`
 - Model gratis OpenRouter sering rate limit dan kadang mengembalikan JSON berantakan:
   wajib retry dengan backoff, hapus pembungkus ```json sebelum parsing, dan validasi
@@ -164,6 +167,12 @@ venv/bin/python tests/test_bot_check.py
 
 # uji diagnostik CUDA Colab runner (tanpa GPU, probe disimulasikan)
 venv/bin/python tests/test_cuda_diagnostics.py
+
+# uji aturan model gratis (suffix :free + router openrouter/free)
+venv/bin/python tests/test_model_gratis.py
+
+# uji penulisan .env di runner Colab (kunci pengguna tidak boleh hilang)
+venv/bin/python tests/test_env_writer.py
 
 # diagnosis lingkungan Colab (GPU, pustaka CUDA, device di .env)
 venv/bin/python autoclip_colab.py --check-env
