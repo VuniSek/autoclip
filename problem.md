@@ -684,3 +684,72 @@
      `tv`, `tv_simply`, `ios`, `mweb` (dapat diatur lewat `YT_PLAYER_CLIENTS`).
   3. Pesan kesalahan menjelaskan bahwa `player_skip=webpage` **tidak boleh** dipakai.
 - Status: FIXED (lihat `fix.md` F-025)
+
+## P-026 | subtitle klip: cue overlap dan teks keluar frame
+- Waktu: 2026-10-19
+- File/langkah terkait: `src/subtitles.py` -> `group_cues()`, `_split_lines()`,
+  `write_ass()` (header `ASS_HEADER`); hasil bake di `output/*.ass` + `output/*.mp4`
+- Pesan error / gejala (salin apa adanya, tanpa API key):
+  ```
+  a) dua teks tampil bersamaan (subtitle saling menumpuk)
+  b) sebagian teks keluar frame (terpotong di kiri/kanan/bawah)
+
+  # .ass hasil run terakhir (output/01_testvideo-id_klip1_...scrol.ass)
+  Style: Default,DejaVu Sans,88,&H00FFFFFF,...,1,6,3,2,90,90,420,1
+  Dialogue: 0,0:00:19.84,0:00:21.64,Default,,0,0,0,,So, we ditched it\Nto throw everything away and
+  Dialogue: 0,0:00:23.80,0:00:26.14,Default,,0,0,0,,Ito as formon, and\Nhonestly, the first to mon
+  ```
+- Bukti pengukuran (libass render di atas latar hitam, 1080x1920):
+  ```
+  s0.6.png   x=49..1029   (lebar  980px)   y=1337..1497
+  s20.2.png  x=13..1068   (lebar 1055px)   y=1336..1498
+  s24.2.png  x=1..1078    (lebar 1077px)   TERPOTONG KIRI + TERPOTONG KANAN
+  s5.5.png   x=0..1079    (lebar 1079px)   TERPOTONG KIRI + TERPOTONG KANAN
+  ```
+  Lebar area teks yang tersedia = 1080 - MarginL 90 - MarginR 90 = **900px**.
+  Lebar baris di file .ass (DejaVu Sans Bold 88px, diukur dengan PIL):
+  ```
+  'to throw everything away and'  -> 1492,8 px  (28 karakter)  LEBIH
+  'bag, that is an architektura'   -> 1367,8 px  (28 karakter)  LEBIH
+  'Nophaya nimadia complete'       -> 1349,9 px  (24 karakter)  LEBIH
+  'Every senior developer'         -> 1144,4 px  (22 karakter)  LEBIH
+  ```
+  Bahkan baris 22 karakter (batas `MAX_CHARS_PER_LINE`) sudah **1144px > 900px**.
+- Bukti overlap cue (timestamp kata tumpang tindih, hal yang memang terjadi di
+  transkripsi kata Whisper):
+  ```
+  words: a*30 (0.00-0.50), b*30 (0.40-0.90), c*20 (0.90-1.20)
+  cue 0.00-0.50 : 'aaaa...'      cue 0.40-0.90 : 'bbbb...'   <- OVERLAP 0,10 detik
+  ```
+  Dua cue aktif bersamaan -> dua teks tampil bersamaan.
+- Dugaan penyebab (pasti, sudah terverifikasi di atas):
+  1. `group_cues()` memakai `end = kata terakhir` dan `start = kata berikutnya` tanpa
+     pernah memastikan `start_cue_berikut >= end_cue_sebelumnya`. Saat dua kata
+     tumpang tindih (percakapan cepat), cue overlap -> dua teks aktif bersamaan.
+  2. Batas lebar pakai **jumlah karakter** (`MAX_CHARS_PER_LINE = 22`,
+     `MAX_CHARS_PER_CUE = 46`), bukan lebar piksel. Dengan FontSize 88 dan margin
+     90, lebar yang tersedia hanya 900px, sedangkan 22 karakter = 1144px. Semua
+     batas karakter terlalu longgar -> teks terpotong di kiri/kanan.
+  3. `_split_lines()` bisa **melewati** batasnya sendiri: kalau tidak ada titik potong
+     yang seimbang, fallback memotong di tengah -> baris jadi 27-28 karakter
+     (1492px), jelas keluar frame.
+  4. `MAX_CHARS_PER_CUE = 46` tidak konsisten dengan 2 x 22 karakter, sehingga satu
+     cue bisa berisi 46 karakter dalam satu baris (2100px).
+  5. Margin kiri/kanan 90px (kebutuhan 60-80px) dan FontSize 88 (terlalu besar untuk
+     2 baris muat di 900px) memperbesar masalah.
+  6. Tidak ada pengukuran font sama sekali: program tidak tahu berapa px sebuah baris.
+     Pillow (PIL) belum menjadi dependensi (hanya ikut matplotlib).
+- Perbaikan (lihat `fix.md` F-026):
+  1. `measure_text_width()` mengukur lebar teks dengan Pillow + font DejaVu Sans Bold
+     yang sama dengan yang dipakai libass; ada estimator cadangan bila Pillow tidak
+     terpasang, dan `pillow` ditambahkan ke `requirements.txt`.
+  2. `_split_lines()` memakai lebar piksel: wrap maksimal 2 baris, titik potong
+     seimbang, dan kata yang terlalu panjang dipotong per karakter.
+  3. `group_cues()` divisive cue berdasarkan lebar (2 baris muat) dan
+     **menjamin tidak ada overlap**: `start` cue berikutnya dipaksa >= `end` cue
+     sebelumnya, cue diurutkan, durasi minimum dijaga.
+  4. Header .ass: `PlayResX/Y` 1080/1920, `FontSize` 72, `MarginL/MarginR` 80,
+     `MarginV` 420 (di atas area UI platform), `WrapStyle` 2 (kita wrap sendiri).
+  5. Test baru `tests/test_subtitles.py`: tidak ada overlap, maksimal 2 baris, lebar
+     tiap baris <= area teks, header benar, dan render nyata diuji ke frame video.
+- Status: FIXED (lihat `fix.md` F-026)

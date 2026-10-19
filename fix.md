@@ -792,3 +792,54 @@
   ditandai, tidak ada kode yang akan mengatasinya — yang perlu: `cookies.txt`, file
   lokal, atau runtime dengan IP lain (Colab baru / VPN). Yang bisa diperbaiki program
   adalah mencoba lebih banyak client dan memberi petunjuk yang benar.
+
+## F-026 | memperbaiki P-026 (subtitle: cue overlap + teks keluar frame)
+- Perubahan (file dan apa yang diubah):
+  - `src/subtitles.py` (tulis ulang bagian layout/cue, API lama tetap sama):
+    - Konstanta layout: `FONT_SIZE=72`, `MARGIN_L=MARGIN_R=80`, `MARGIN_V=420`,
+      `OUTLINE=6`, `SHADOW=3`, `MAX_LINES=2`, `MIN_CUE_SECONDS=0.30`,
+      `TEXT_AREA_WIDTH = 1080 - 80 - 80 - 2*(6+3) = 902px`.
+    - `measure_text_width()` mengukur lebar teks dengan Pillow memakai file font
+      DejaVu Sans Bold yang sama dengan libass; ada estimator cadangan konservatif
+      (0,62 em/karakter) kalau Pillow tidak ada, jadi batas tidak pernah longgar.
+    - `_split_lines()` sekarang wrap berdasarkan **lebar piksel**: baris pertama diisi
+      selagi muat, sisanya baris kedua; kalau tidak muat, cari titik potong paling
+      seimbang; kata tunggal yang terlalu lebar dipotong per karakter. Hasilnya
+      maksimal 2 baris dan **tidak pernah** melewati lebar area teks.
+    - `group_cues()` membagi cue memakai lebar (bukan hanya jumlah karakter) dan
+      memanggil `fix_overlaps()`.
+    - `fix_overlaps()` baru: cue diurutkan, cue berikutnya dipaksa mulai pada waktu
+      selesai cue sebelumnya, cue sebelumnya dipotong bila perlu, durasi minimum
+      0,30 detik dijaga. Inilah yang menghapus "dua teks tampil bersamaan".
+    - `write_ass()` memakai konstanta layout baru; header tetap `PlayResX/Y=1080/1920`
+      dan `WrapStyle: 2` (kita wrap sendiri).
+  - `requirements.txt`: tambah `pillow>=10.0.0` (sebelumnya hanya ikut matplotlib,
+    jadi tidak dijamin ada).
+  - `tests/test_subtitles.py` (baru, 6 bagian): tidak ada cue overlap (dengan
+    timestamp kata yang sengaja tumpang tindih), durasi minimum & urutan waktu,
+    maksimal 2 baris + lebar baris <= area teks, header .ass benar (PlayRes,
+    WrapStyle, FontSize, margin 60-80, MarginV, alignment), .srt tidak overlap, dan
+    **render nyata** lewat FFmpeg+libass di atas latar hitam lalu pengukuran piksel
+    teks.
+- Alasan: batas lebar lama memakai jumlah karakter (22) padahal yang menentukan
+  adalah piksel. Dengan FontSize 88 dan margin 90, lebar tersedia 900px, sedangkan
+  22 karakter = 1144px dan baris fallback 28 karakter = 1492px. Karena itu teks
+  selalu keluar frame. Selain itu `group_cues()` tidak pernah menjamin cue berikutnya
+  mulai setelah cue sebelumnya selesai, sehingga timestamp kata yang tumpang tindih
+  menghasilkan dua cue aktif bersamaan. Pelajaran dari F-008 (teks harus dipecah
+  manual) diperluas: bukan cuma "pecah per \N", tapi pecah **berdasarkan lebar piksel
+  yang terukur**, dan tumpang tindih harus dihapus di sumbernya.
+- Hasil pengujian ulang:
+  - Bukti render sebelum perbaikan (libass di atas latar hitam):
+    `t=5,5s -> x=0..1079` (terpotong kiri+kanan), `t=24,2s -> x=1..1078`.
+  - Bukti render sesudah perbaikan: `t=0,8 -> x=228..851`, `t=6,0 -> x=243..837`,
+    `t=20,0 -> x=204..877`, `t=24,0 -> x=185..896` — semua di dalam frame, bagian
+    bawah teks berhenti di y=1498 (di atas area UI platform, MarginV 420).
+  - `.ass` hasil run nyata: 19 cue, **0 overlap**, lebar baris maks 896px (<= 902px),
+    maksimal 2 baris per cue.
+  - `tests/test_subtitles.py` lulus (6 bagian).
+  - Alur penuh `main.py` (file lokal + mock OpenRouter): 2 klip 1080x1920 + subtitle
+    terbakar, exit 0.
+  - Regresi: `test_highlight` 7/7, `test_progress`, `test_bot_check`,
+    `test_transcribe_cuda_fallback`, `test_cuda_diagnostics`, `test_model_gratis`,
+    `test_env_writer` semuanya lulus.
