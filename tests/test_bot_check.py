@@ -124,17 +124,18 @@ def main() -> int:
     print("[1] Deteksi penanda pesan")
     failures += case_markers()
 
-    print("\n[2] Bot check -> retry player client -> berhasil")
+    print("\n[2] Bot check -> retry per player client -> berhasil")
     with tempfile.TemporaryDirectory() as td:
         workdir = Path(td)
         script = [RuntimeError(BOT_MSG), ok_info(workdir, title="Big Buck Bunny")]
         path, meta, calls, out = run_download(workdir, script)
         print(f"  percobaan={len(calls)} opts[1]={calls[1].get('extractor_args')}")
         print(f"  judul={meta['title'] if meta else None} file={Path(path).name if path else None}")
-        print("  log retry:", [ln for ln in out.splitlines() if "verifikasi bot" in ln or "player client" in ln][:2])
+        print("  log retry:", [ln for ln in out.splitlines() if "player client" in ln][:2])
         if len(calls) != 2:
-            failures.append(f"harus 2 percobaan (default + fallback), dapat {len(calls)}")
-        if calls[1].get("extractor_args") != {"youtube": ["player_client=tv,ios"]}:
+            failures.append(f"harus 2 percobaan (default + 1 client), dapat {len(calls)}")
+        # Tiap client dicoba SATU-SATU (bukan tv,ios digabung) - P-024
+        if calls[1].get("extractor_args") != {"youtube": ["player_client=tv"]}:
             failures.append(f"extractor_args retry salah: {calls[1].get('extractor_args')}")
         if not meta or meta["title"] != "Big Buck Bunny":
             failures.append("unduhan sukses tidak mengembalikan metadata judul")
@@ -142,7 +143,9 @@ def main() -> int:
     print("\n[3] Bot check terus-menerus -> BotCheckError + petunjuk")
     with tempfile.TemporaryDirectory() as td:
         workdir = Path(td)
-        script = [RuntimeError(BOT_MSG), RuntimeError(BOT_MSG)]
+        # 1 percobaan default + 1 untuk tiap client fallback
+        n_client = len(downloader.fallback_clients())
+        script = [RuntimeError(BOT_MSG) for _ in range(n_client + 1)]
         try:
             run_download(workdir, script)
             failures.append("harusnya melempar BotCheckError")
@@ -156,6 +159,11 @@ def main() -> int:
                     failures.append(f"pesan tidak menyebut '{wajib}'")
             if "Sign in to confirm" not in text:
                 failures.append("pesan tidak menyertakan galat asli YouTube")
+            for client in downloader.fallback_clients():
+                if client not in text:
+                    failures.append(f"pesan tidak menyebut client yang dicoba: {client}")
+            if "yt-dlp --extractor-args" not in text:
+                failures.append("pesan tidak memberi perintah manual siap tempel")
 
     print("\n[4] Cookie sudah dikirim -> tidak ada retry sia-sia")
     with tempfile.TemporaryDirectory() as td:
@@ -204,6 +212,24 @@ def main() -> int:
     print("\n[6] Validasi cookie + extractor_args")
     with tempfile.TemporaryDirectory() as td:
         workdir = Path(td)
+        # daftar player client bisa diatur lewat env (P-024)
+        import os
+
+        asli = os.environ.get("YT_PLAYER_CLIENTS")
+        try:
+            os.environ["YT_PLAYER_CLIENTS"] = "tv,ios,web_safari,mweb"
+            clients = downloader.fallback_clients()
+            print(f"  YT_PLAYER_CLIENTS -> {clients}")
+            if clients != ["tv", "ios", "web_safari", "mweb"]:
+                failures.append(f"env YT_PLAYER_CLIENTS tidak dipakai: {clients}")
+        finally:
+            if asli is None:
+                os.environ.pop("YT_PLAYER_CLIENTS", None)
+            else:
+                os.environ["YT_PLAYER_CLIENTS"] = asli
+        if downloader.fallback_clients() != list(downloader.BOT_CHECK_FALLBACK_CLIENTS):
+            failures.append("default fallback_clients() harus sesuai BOT_CHECK_FALLBACK_CLIENTS")
+        print(f"  default -> {downloader.fallback_clients()}")
         try:
             downloader.resolve_cookies(workdir / "hilang.txt")
             failures.append("file cookies yang tidak ada harus ditolak")
@@ -220,12 +246,18 @@ def main() -> int:
 
     if downloader.build_extractor_args(None) != {}:
         failures.append("player_client None harus menghasilkan opts kosong")
-    if downloader.build_extractor_args("tv") != {"youtube": ["player_client=tv"]}:
+    if downloader.build_extractor_args("tv") != {
+        "extractor_args": {"youtube": ["player_client=tv"]}
+    }:
         failures.append("player_client tunggal salah")
+    gabungan = ",".join(downloader.BOT_CHECK_FALLBACK_CLIENTS)
     if downloader.build_extractor_args(downloader.BOT_CHECK_FALLBACK_CLIENTS) != {
-        "youtube": ["player_client=tv,ios"]
+        "extractor_args": {"youtube": ["player_client=" + gabungan]}
     }:
         failures.append("gabungan player client salah")
+    # Key top-level "youtube" diabaikan yt-dlp -> harus berada di extractor_args
+    if "youtube" in downloader.build_extractor_args("tv"):
+        failures.append("player client harus di dalam extractor_args, bukan key top-level")
     print("  extractor_args: None/tv/tuple -> kosong, tv, tv,ios")
 
     print("\n[7] File lokal tidak terpengaruh")

@@ -127,8 +127,12 @@ def make_progress_hook(every: float = PROGRESS_INTERVAL, step: float = PROGRESS_
 
 # Player client yang dicoba otomatis saat YouTube menuntut verifikasi bot.
 # Client ini tidak butuh login, jadi sering lolos dari "Sign in to confirm you're
-# not a bot" (lihat problem.md P-016).
-BOT_CHECK_FALLBACK_CLIENTS = ("tv", "ios")
+# not a bot" (lihat problem.md P-016). Dicoba SATU-SATU, bukan digabung, supaya
+# jelas client mana yang ditolak dan mana yang masih layak dicoba (P-024).
+BOT_CHECK_FALLBACK_CLIENTS = ("tv", "ios", "web_safari")
+
+# Client lain yang sering dicoba manual; dipakai untuk memberi perintah siap tempel.
+EXTRA_CLIENT_EXAMPLES = ("mweb", "android_vr", "tv_simply")
 
 
 class BotCheckError(DownloadError):
@@ -150,7 +154,11 @@ def looks_like_bot_check(message: str) -> bool:
     return any(marker in msg for marker in BOT_CHECK_MARKERS)
 
 
-def bot_check_help(source: str, cookies: str | Path | None = None) -> str:
+def bot_check_help(
+    source: str,
+    cookies: str | Path | None = None,
+    tried_clients: tuple[str, ...] | list[str] = (),
+) -> str:
     """Petunjuk yang bisa dilakukan pengguna saat YouTube menolak IP (P-016)."""
     lines = [
         "YouTube menolak IP ini dengan verifikasi bot "
@@ -160,6 +168,17 @@ def bot_check_help(source: str, cookies: str | Path | None = None) -> str:
         "",
         "Yang bisa dilakukan:",
     ]
+    if tried_clients:
+        lines.append(
+            "  - Player client yang sudah dicoba dan tetap ditolak: "
+            + ", ".join(tried_clients)
+        )
+        lines.append("  - Uji client lain manual (tiap perintah = 1 percobaan):")
+        for client in EXTRA_CLIENT_EXAMPLES:
+            lines.append(
+                f"      yt-dlp --extractor-args \"youtube:player_client={client}\" "
+                f"-f \"bv*+ba/b[height<=720]\" -o \"source.%(ext)s\" \"{source}\""
+            )
     if cookies:
         lines.append(
             f"  - Cookie sudah dipakai ({cookies}) tapi tetap ditolak -> IP memang diblokir."
@@ -196,6 +215,22 @@ def resolve_cookies(cookies: str | Path | None) -> Path | None:
     return path.resolve()
 
 
+def fallback_clients() -> list[str]:
+    """Daftar player client yang dicoba saat bot check.
+
+    Bisa diatur lewat env `YT_PLAYER_CLIENTS` (pisah koma) tanpa mengubah kode,
+    mis. `YT_PLAYER_CLIENTS=tv,ios,web_safari,mweb` (lihat problem.md P-024).
+    """
+    import os
+
+    raw = (os.getenv("YT_PLAYER_CLIENTS") or "").strip()
+    if raw:
+        clients = [c.strip() for c in raw.split(",") if c.strip()]
+        if clients:
+            return clients
+    return list(BOT_CHECK_FALLBACK_CLIENTS)
+
+
 def build_format(max_height: int | None = None) -> str:
     """Pilih format dengan batas tinggi agar unduhan tidak rechazar file 4K raksasa.
 
@@ -209,13 +244,21 @@ def build_format(max_height: int | None = None) -> str:
     return f"bv*[height<={h}]+ba/b[height<={h}]/bv*+ba/best"
 
 
-def build_extractor_args(player_client: str | list[str] | tuple[str, ...] | None):
-    """`extractor_args` untuk memaksa player client tertentu (opsional)."""
+def build_extractor_args(player_client: str | list[str] | tuple[str, ...] | None) -> dict:
+    """Fragmen `opts` yt-dlp untuk memaksa player client tertentu (opsional).
+
+    PENTING: hasilnya harus disisipkan sebagai `opts["extractor_args"]`, bukan
+    `opts["youtube"]` — yt-dlp mengabaikan key top-level `youtube` (lihat
+    problem.md P-024 dan fix.md F-016). Karena itu fungsi ini mengembalikan fragmen
+    opts lengkap supaya tidak bisa salah pasang.
+    """
     if not player_client:
         return {}
     clients = [player_client] if isinstance(player_client, str) else list(player_client)
     joined = ",".join(c.strip() for c in clients if str(c).strip())
-    return {"youtube": ["player_client=" + joined]} if joined else {}
+    if not joined:
+        return {}
+    return {"extractor_args": {"youtube": ["player_client=" + joined]}}
 
 
 def download(
@@ -290,8 +333,7 @@ def download(
     }
     # yt-dlp membaca player client dari opts["extractor_args"]["youtube"], BUKAN
     # dari key top-level "youtube".
-    if extractor_opts:
-        opts["extractor_args"] = extractor_opts
+    opts.update(extractor_opts)
     print(f"  [unduh] mulai: {source}", flush=True)
     print(f"  [unduh] format: {fmt}", flush=True)
     if cookie_opts:
@@ -334,19 +376,32 @@ def download(
         if cookie_opts or extractor_opts:
             raise BotCheckError(bot_check_help(source, cookie_path or cookies_file)) from exc
 
-        clients = ",".join(BOT_CHECK_FALLBACK_CLIENTS)
+        clients = fallback_clients()
         print(
-            "  [unduh] YouTube meminta verifikasi bot (IP ini ditandai).\n"
-            f"  [unduh] mencoba ulang dengan player client: {clients}",
+            "  [unduh] YouTube meminta verifikasi bot (IP ini ditandai).",
             flush=True,
         )
-        retry_opts = dict(opts)
-        retry_opts["extractor_args"] = build_extractor_args(clients)
-        try:
-            info, path = fetch(retry_opts)
-            print("  [unduh] berhasil tanpa login.", flush=True)
-        except Exception as exc2:
-            raise BotCheckError(bot_check_help(source, cookies_file)) from exc2
+        dicoba: list[str] = []
+        galat_terakhir: Exception | None = None
+        for client in clients:
+            dicoba.append(client)
+            print(f"  [unduh] mencoba ulang dengan player client: {client}", flush=True)
+            retry_opts = dict(opts)
+            retry_opts.update(build_extractor_args(client))
+            try:
+                info, path = fetch(retry_opts)
+                print(
+                    f"  [unduh] berhasil tanpa login (player client: {client}).",
+                    flush=True,
+                )
+                break
+            except Exception as exc2:  # noqa: BLE001
+                galat_terakhir = exc2
+                print(f"  [unduh] player client {client} juga ditolak.", flush=True)
+        else:
+            raise BotCheckError(
+                bot_check_help(source, cookies_file, tried_clients=tuple(dicoba))
+            ) from (galat_terakhir or exc)
 
     if not path.exists():
         candidates = sorted(workdir.glob("source.*"))

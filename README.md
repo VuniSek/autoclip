@@ -60,6 +60,7 @@ Sisanya biarkan default dari `.env.example` (sudah cocok untuk kebanyakan kasus)
 | `MAX_SOURCE_HEIGHT` | `1080` | turunkan ke `720` supaya unduhan jauh lebih cepat |
 | `DOWNLOAD_PROGRESS_SECONDS` | `15` | jarak antar baris progress unduhan; `0` = hanya tiap 10% |
 | `YT_COOKIES_FILE` | (kosong) | isi `cookies.txt` hanya kalau YouTube meminta verifikasi bot |
+| `YT_PLAYER_CLIENTS` | `tv,ios,web_safari` | player client yang dicoba saat verifikasi bot; tambah `mweb`/`android_vr` kalau masih ditolak |
 
 ### Langkah 4 — Jalankan
 
@@ -131,7 +132,7 @@ venv/bin/python main.py \
 | Unduhan lama "macet" | Bukan macet — cek file `.part` di `temp/`, unduhan sedang jalan |
 | Progress unduhan terlalu jarang/terlalu sering | atur `DOWNLOAD_PROGRESS_SECONDS` di `.env` atau pakai `--progress-seconds N` |
 | `HTTP 403` dari YouTube | IP diblokir; pakai file lokal, atau `venv/bin/pip install -U yt-dlp`, atau coba lagi nanti |
-| `Sign in to confirm you're not a bot` | Reputasi IP sedang ditandai, bukan bug program. Program sudah mencoba ulang dengan player client tanpa login. Kalau tetap ditolak: pakai file lokal (`input/`), kirim cookie (`--cookies cookies.txt`), tunggu beberapa jam, atau ganti jaringan. Lihat [P-016](problem.md) |
+| `Sign in to confirm you're not a bot` | Reputasi IP sedang ditandai, bukan bug program. Program mencoba ulang dengan beberapa player client satu per satu (`tv`, `ios`, `web_safari`). Kalau tetap ditolak: pakai file lokal (`input/`), kirim cookie (`--cookies cookies.txt`), atau tambahkan client lain lewat `YT_PLAYER_CLIENTS=tv,ios,web_safari,mweb` di `.env`. Lihat [P-016](problem.md) |
 | `HTTP 429` dari OpenRouter | Kuota model gratis habis; tunggu, ganti model `:free`, atau pakai akun yang pernah beli kredit |
 | `libcublas.so.12 is not found` | GPU tidak bisa dipakai. Otomatis turun ke CPU; kalau `WHISPER_DEVICE=cuda` dipaksa, ubah ke `cpu` + `int8`, atau jalankan lewat `autoclip_colab.py` |
 | `[colab] GPU ada tapi ctranslate2 tidak bisa memakainya -> fallback ke CPU` | Angka `[transcribe] device=cpu` muncul, padahal Colab punya GPU. Cek penyebabnya dengan `!python autoclip_colab.py --check-env` (baris `CUDA :` + daftar pustaka). Kalau muncul "TIDAK ADA di folder mana pun", program sudah mencoba `pip install --force-reinstall --no-deps nvidia-cublas-cu12 nvidia-cuda-runtime-cu12`; kalau masih gagal, **Restart runtime** lalu ulangi. Lihat [P-019](problem.md) dan [P-021](problem.md) |

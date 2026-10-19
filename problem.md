@@ -576,3 +576,36 @@
   dipakai `src/config.py`, dan penulis `.env` mempertahankan kunci tambahan milik
   pengguna (yang tidak dikenal program) alih-alih membuangnya.
 - Status: FIXED (lihat `fix.md` F-023)
+
+## P-024 | retry verifikasi bot memakai satu permintaan gabungan `player_client=tv,ios`
+- Waktu: 2026-10-19
+- File/langkah terkait: `src/downloader.py` -> `download()` (blok retry bot check) +
+  `BOT_CHECK_FALLBACK_CLIENTS`
+- Pesan error / gejala (salin apa adanya, tanpa API key):
+  ```
+  [unduh] kalau lama tidak bergerak, cek ukuran file .part di folder temp/; tekan Ctrl+C untuk membatalkan
+  ERROR: [youtube] dE3ReotqynY: Sign in to confirm you’re not a bot. Use --cookies-from-browser or --cookies for the authentication. See ...
+    [unduh] YouTube meminta verifikasi bot (IP ini ditandai).
+    [unduh] mencoba ulang dengan player client: tv,ios
+  ERROR: [youtube] dE3ReotqynY: Sign in to confirm you’re not a bot. Use --cookies-from-browser or --cookies for the authentication. See ...
+  ```
+  Di Colab, video yang tadinya bisa diunduh kembali ditolak dengan verifikasi bot.
+- Dugaan penyebab:
+  1. Verifikasi bot ini memang ada di luar kendali program (reputasi IP Colab), dan
+     cookie lokal tidak tersedia di Colab — itu tidak bisa diperbaiki di kode.
+  2. Yang **bisa** diperbaiki: percobaan ulang dilakukan sekali dengan
+     `player_client=tv,ios` dalam satu permintaan. Kalau `tv` sendiri yang ditolak
+     (mis. versi yt-dlp tertentu tidak mendukungnya), `ios` yang sebenarnya bisa
+     lolos ikut gagal karena keduanya disatukan. Program jadi tidak tahu client mana
+     yang masih layak dicoba, dan pengguna tidak diberi perintah yang bisa langsung
+     dijalankan.
+  3. Pesan galat yang muncul di log adalah output yt-dlp mentah; program belum
+     menambahkan daftar per client yang sudah dicoba ke pesan akhirnya.
+- Perbaikan (lihat `fix.md` F-024):
+  1. Retry dilakukan **per client** (`tv`, lalu `ios`, lalu `web_safari`), bukan satu
+     permintaan gabungan, dan tiap percobaan dicetak terpisah.
+  2. `BotCheckError` memuat daftar client yang sudah dicoba + perintah siap tempel
+     untuk menguji client lain secara manual + opsi cookie/file lokal.
+  3. `BOT_CHECK_FALLBACK_CLIENTS` dapat dikonfigurasi lewat env `YT_PLAYER_CLIENTS`
+     (mis. `tv,ios,web_safari,mweb`) tanpa mengubah kode.
+- Status: FIXED (lihat `fix.md` F-024)

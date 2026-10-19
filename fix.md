@@ -698,3 +698,48 @@
     `load_config()` membacanya normal: model, `max_source_height=1080`,
     `download_progress_seconds=15`, `yt_cookies_file=''`.
   - Regresi: seluruh uji lain lulus, `py_compile` OK.
+
+## F-024 | memperbaiki P-024 (retry verifikasi bot per player client)
+- Perubahan (file dan apa yang diubah):
+  - `src/downloader.py`:
+    - `BOT_CHECK_FALLBACK_CLIENTS = ("tv", "ios", "web_safari")` + `EXTRA_CLIENT_EXAMPLES`
+      + `fallback_clients()` (bisa dioverride lewat env `YT_PLAYER_CLIENTS`).
+    - Retry sekarang **per client**, bukan satu permintaan gabungan `player_client=tv,ios`.
+      Tiap percobaan dicetak (`mencoba ulang dengan player client: tv`, lalu
+      `player client tv juga ditolak.`), dan kalau satu berhasil lognya menyebut client
+      yang berhasil.
+    - `bot_check_help()` menerima `tried_clients` dan menambahkan: daftar client yang
+      sudah dicoba + perintah siap tempel untuk menguji client lain manual
+      (`yt-dlp --extractor-args "youtube:player_client=mweb" ...`).
+    - `build_extractor_args()` diubah mengembalikan **fragmen opts lengkap**
+      (`{"extractor_args": {"youtube": [...]}}`) dan kedua pemanggilnya diperbarui.
+      Sebelumnya fungsinya mengembalikan dict dalam, sehingga pemanggilan baru
+      (`retry_opts.update(...)`) menaruh key top-level `youtube` — key yang
+      **diabaikan yt-dlp**, artinya retry sebenarnya berjalan dengan client default
+      (bug yang sama seperti catatan di F-016, terulang karena API-nya japit).
+  - `.env.example` + `README.md`: `YT_PLAYER_CLIENTS` (opsional) dan baris troubleshooting
+    yang menyebut daftar client + cara menambah client lain.
+  - `autoclip_colab.py`: `DEFAULTS`/`ENV_ORDER` ditambah `YT_PLAYER_CLIENTS` agar tidak
+    hilang saat `.env` ditulis ulang (P-023).
+  - `tests/test_bot_check.py`: skenario 2 & 3 ditulis ulang (retry per client, daftar
+    client di pesan), skenario 6 ditambah uji `fallback_clients()` + env override,
+    dan `build_extractor_args()` diuji dalam bentuk opts lengkap.
+- Alasan: menggabungkan beberapa client dalam satu permintaan membuat program tidak
+  bisa memisahkan "client ditolak" dari "client tidak didukung", dan tidak ada cara
+  memberi tahu pengguna client mana yang masih layak dicoba. Per client juga membuat
+  jumlah permintaan tetap kecil (3-4), sesuai peringatan P-016 bahwa mengulang ke IP
+  yang diblokir justru memperburuk.
+- Hasil pengujian ulang:
+  - `tests/test_bot_check.py` lulus (7 skenario): bot check -> retry `tv` (2 percobaan,
+    `extractor_args={"youtube": ["player_client=tv"]}`) lalu berhasil; bot check
+    terus-menerus -> `BotCheckError` yang menyebut ketiga client + perintah manual
+    siap tempel; cookie dikirim -> tetap 1 percobaan; galat biasa -> `DownloadError`
+    tanpa retry; `fallback_clients()` menghormati `YT_PLAYER_CLIENTS`.
+  - Alur penuh `main.py` (file lokal + mock OpenRouter): 2 klip 1080x1920 + subtitle,
+    exit 0.
+  - Regresi: `py_compile`, `test_highlight` 7/7, `test_progress`, `test_transcribe_cuda_fallback`,
+    `test_cuda_diagnostics`, `test_model_gratis`, `test_env_writer` lulus.
+- Catatan: verifikasi bot dari YouTube **tidak bisa dihilangkan** dari sisi program —
+  itu reputasi IP. Yang diperbaiki di sini adalah banyaknya jalur yang dicoba dan
+  kejelasan petunjuk yang diberikan. Jalur yang benar-benar berhasil: `cookies.txt`
+  (butuh akun) atau mengunduh manual lalu memakai file lokal.
