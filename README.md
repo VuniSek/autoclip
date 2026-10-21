@@ -10,6 +10,27 @@ Cara kerjanya: unduh video → transkrip per kata (Whisper) → pilih momen terb
 
 ---
 
+## Yang Bisa Dilakukan (fitur & cara pakainya)
+
+| Fitur | Cara pakai | Catatan |
+|---|---|---|
+| **Crop ikut wajah (face tracking)** | `--face-tracking` atau `FACE_TRACKING=true` | Wajah dilacak sepanjang klip, jendela crop **bergerak** mengikuti wajah. Detail di [Crop yang Mengikuti Wajah](#crop-yang-mengikuti-wajah-face-tracking) |
+| Atur face tracking per-cli | `--face-sample-fps 20 --face-smooth 3 --face-detect-width 1280` | Menimpa nilai `.env` untuk satu kali jalan |
+| Subtitle terbakar, tidak keluar frame | otomatis | Lebar teks diukur dalam piksel, cue tidak pernah tumpang tindih |
+| Subtitle juga dalam `.srt` | otomatis | File `.srt` + `.ass` tersimpan di `output/` |
+| Gabungkan semua klip jadi 1 video | `--merge` atau `MERGE_CLIPS=true` | Hasil: `output/00_<judul>_gabungan.mp4` |
+| Ambil video dari YouTube | `--input <URL>` | yt-dlp + progress + penanganan verifikasi bot |
+| Pakai video lokal | `--input input/vidio.mp4` | Tidak perlu internet untuk pemrosesannya |
+| Hemat waktu saat bereksperimen | `--reuse-transcript` | Memakai `temp/transcript.json` yang sudah ada |
+| Batas resolusi unduhan | `MAX_SOURCE_HEIGHT=720` | Hasil akhir tetap 1080x1920, unduhan jauh lebih ringan |
+| Kirim cookie YouTube | `--cookies cookies.txt` | Hanya kalau YouTube minta verifikasi bot |
+| Jalan di Colab (GPU gratis) | `!python autoclip_colab.py ...` | Install, CUDA, `.env`, zip hasil, semua diurus |
+
+> 📄 **[CARA_PAKAI.md](CARA_PAKAI.md)** = resep perintah siap pakai (lokal + Colab),
+> termasuk cara mengatur face tracking dan semua opsinya.
+
+---
+
 ## Cara Pakai (lokal)
 
 ### Langkah 1 — Pastikan FFmpeg ada
@@ -127,22 +148,54 @@ Kalau `--face-tracking` aktif, program **melacak wajah sepanjang klip** dan
 jendela crop 9:16 bergerak mengikuti wajah — orang yang jalan/bergeser tetap
 wajahnya di tengah frame, bukan terkunci di satu posisi.
 
-Cara kerjanya:
+**Sebelum vs sesudah** (video uji: wajah bergerak dari kiri ke kanan):
 
-1. Wajah dideteksi tiap `FACE_TRACK_SAMPLE_FPS` detik memakai **YuNet** (model
-   DNN di `assets/face_detection_yunet_2023mar.onnx`, 227 KB, gratis & open
-   source). Kalau modelnya tidak ada, program pakai Haar cascade bawaan
-   `assets/haarcascade_frontalface_default.xml`.
-2. Wajah yang dipilih adalah yang **paling besar dan paling konsisten** dengan
-   posisi sebelumnya, jadi tidak berganti orang di tengah.
-3. Lintasan diperrata (celah diisi, deteksi liar dibuang), lalu
-   dijadikan perintah `sendcmd` untuk filter `crop` FFmpeg sehingga crop
-   benar-benar bergerak.
-4. Kalau wajah **tidak terdeteksi sama sekali**, program otomatis fallback ke
-   crop tengah — jadi klip tetap jadi.
+| | Wajah di frame hasil | Posisi wajah di frame |
+|---|---|---|
+| Crop diam (cara lama) | hilang di **101 dari 200** frame | 0,23 – 0,74 (kadang sama sekali tidak ada) |
+| Crop bergerak (sekarang) | ada di **200 dari 200** frame | 0,458 – 0,547 (tengah = 0,500) |
 
-Kalau hasilnya masih kurang mulus, naikkan `FACE_TRACK_SAMPLE_FPS=20` (lebih
-accurate, lebih lambat) atau turunkan `FACE_TRACK_SMOOTH=3` (lebih responsif).
+#### Cara kerjanya (4 langkah)
+
+1. **Deteksi** — wajah dideteksi tiap `FACE_TRACK_SAMPLE_FPS` detik memakai
+   **YuNet** (model DNN di `assets/face_detection_yunet_2023mar.onnx`, 227 KB,
+   gratis & open source). Kalau modelnya tidak ada, program otomatis pakai
+   Haar cascade `assets/haarcascade_frontalface_default.xml`.
+2. **Pilih wajah** — yang dipilih adalah wajah **terbesar** yang masih **dekat**
+   dengan posisi sebelumnya, jadi tidak berganti orang di tengah klip.
+3. **Haluskan lintasan** — celah diisi (interpolasi), deteksi liar dibuang
+   (filter median), lalu dirata-rata. Hasilnya mulus, tidak "goyang".
+4. **Gerakkan crop** — lintasan diubah jadi perintah `sendcmd` untuk filter
+   `crop` FFmpeg, sehingga jendela crop benar-benar bergerak mengikuti wajah.
+
+Kalau wajah **tidak terdeteksi sama sekali** (atau modelnya hilang, atau
+render gagal), program otomatis **fallback ke crop tengah** — klip tetap jadi,
+tidak pernah gagal karena fitur ini.
+
+#### Menyesuaikan hasil
+
+| Yang diubah | Cara | Efek |
+|---|---|---|
+| Lebih akurat | `--face-sample-fps 20` atau `FACE_TRACK_SAMPLE_FPS=20` | deteksi lebih rapat, gerak lebih halus, ~2× lebih lambat |
+| Lebih responsif | `--face-smooth 3` atau `FACE_TRACK_SMOOTH=3` | lebih cepat mengikuti gerakan, sedikit lebih "goyang" |
+| Lebih rinci | `--face-detect-width 1280` atau `FACE_DETECT_WIDTH=1280` | wajah kecil lebih mudah terdeteksi |
+| Mematikan | `--no-face-tracking` atau `FACE_TRACKING=false` | crop tengah, paling cepat |
+
+Contoh gabungan:
+
+```bash
+venv/bin/python main.py \
+  --input input/vidio-saya.mp4 \
+  --face-tracking \
+  --face-sample-fps 20 \
+  --face-smooth 3 \
+  --max-clips 3
+```
+
+> Catatan: `--face-sample-fps`, `--face-smooth`, `--face-detect-width` hanya
+> berlaku kalau face tracking aktif. Nilai defaultnya diambil dari `.env`
+> (`FACE_TRACK_SAMPLE_FPS`, `FACE_TRACK_SMOOTH`, `FACE_DETECT_WIDTH`), dan
+> perintah di baris perintah **menimpa** nilai `.env` untuk satu kali jalan.
 
 ### Gabungkan Semua Klip Jadi Satu Video
 
@@ -237,7 +290,48 @@ Opsi Colab yang berguna:
 | `--drive-dir PATH` | simpan hasil ke Google Drive |
 | `--skip-install` | lewati install (percobaan kedua dst.). GPU tetap diperiksa, jadi kalau pustaka CUDA sudah terpasang, mode tetap GPU |
 | `--no-download` | jangan zip/unduh hasil |
+| `--face-tracking` / `--no-face-tracking` | crop ikut wajah / crop tengah (ditulis ke `.env` di Colab) |
 | `-- <args>` | teruskan argumen ke `main.py`, mis. `-- --max-clips 3 --keep-temp` |
+
+### Face tracking di Colab
+
+Sama persis dengan di laptop — yang berbeda cuma letaknya. Yang perlu dijaga:
+**folder `assets/` harus ikut ter-clone**, karena model deteksi wajah
+(`face_detection_yunet_2023mar.onnx`) ada di sana. Kalau `assets/` tidak ikut,
+program otomatis fallback ke crop tengah (tidak error, tapi wajah tidak
+diikuti).
+
+```python
+# 1) clone repo (pastikan folder assets/ ikut ter-clone)
+!git clone https://github.com/USER/autoclip.git /content/autoclip
+
+# 2) cek dulu: model wajah & GPU sudah siap?
+!python /content/autoclip/autoclip_colab.py --check-env
+```
+
+Baris `Wajah : model=...` dioutput `--check-env` menunjukkan model apa yang
+dipakai (`yunet` = akurat, `haar` = cadangan, `tidak ada` = face tracking
+tidak bisa jalan, crop tengah saja).
+
+```python
+# 3) jalankan dengan crop ikut wajah
+!python /content/autoclip/autoclip_colab.py \
+    --input "https://www.youtube.com/watch?v=VIDEO_ID" \
+    --model google/gemini-2.0-flash-exp:free \
+    --face-tracking \
+    -- --face-sample-fps 20 --face-smooth 3 --max-clips 3
+```
+
+- `--face-tracking` (milik `autoclip_colab.py`) menulis `FACE_TRACKING=true`
+  ke `.env` di Colab, jadi berlaku untuk semua percobaan berikutnya di runtime
+  yang sama.
+- Argumen setelah `--` diteruskan ke `main.py`, jadi
+  `-- --face-sample-fps 20` berlaku khusus untuk percobaan ini saja.
+- Face tracking menambah waktu sekitar **10–20 detik per klip** (deteksi wajah
+  berjalan di CPU). Kalau video sudah banyak, turunkan
+  `--face-sample-fps` ke `5`.
+- Hasil tetap sama: zip berisi semua klip + file `.srt`/`.ass`, dan file
+  gabungan kalau `-- --merge` dipakai.
 
 ### Kalau YouTube minta verifikasi bot di Colab
 
@@ -277,5 +371,6 @@ venv/bin/pip install edge-tts
 venv/bin/python make_test_video.py
 ```
 
-Lihat juga `AGENTS.md` (aturan kerja proyek), `problem.md`, dan `fix.md` kalau
+Lihat juga `CARA_PAKAI.md` (resep perintah siap pakai, lokal + Colab),
+`AGENTS.md` (aturan kerja proyek), `problem.md`, dan `fix.md` kalau
 ingin tahu riwayat masalah yang pernah ditangani.

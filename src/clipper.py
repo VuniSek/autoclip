@@ -191,7 +191,11 @@ def plan_face_crop(
     cmd_path = cmd_dir / (
         f"facecmd_{int(round(start * 1000))}_{int(round(duration * 1000))}.cmd"
     )
-    write_sendcmd(cmd_path, axis, positions)
+    # Deadband: gerakan crop di bawah ~0,4% lebar frame hasil tidak terlihat,
+    # tapi bikin encoder menghasilkan file jauh lebih besar (goyang 1-2 piksel
+    # memaksa blok baru terus-menerus).
+    deadband = max(2.0, out_w * 0.004)
+    write_sendcmd(cmd_path, axis, positions, deadband=deadband)
 
     first = int(round(positions[0][1]))
     if axis == "x":

@@ -846,3 +846,28 @@
      `FACE_DETECT_WIDTH` (juga masuk `DEFAULTS`/`ENV_ORDER` runner Colab).
   6. `tests/test_face_tracking.py` (baru, 7 bagian).
 - Status: FIXED (lihat `fix.md` F-028)
+
+## P-029 | file hasil face tracking 3x lebih besar karena crop "goyang" 1-2 piksel
+- Waktu: 2026-10-22 01:45
+- File/langkah terkait: `src/face_track.py` -> `write_sendcmd()` (deadband),
+  `src/clipper.py` -> `plan_face_crop()`, langkah 4/5 potong klip
+- Pesan error / gejala (salin apa adanya, tanpa API key):
+  ```
+  # bukan error: ukuran file hasil naik drastis
+  # video uji 1280x720, wajah DIAM (tidak bergerak), 38 detik klip
+  # sebelum deadband:
+  output/01_testvideo-id-face_klip1_....mp4   9.2 MB
+  # sesudah deadband:
+  output/01_testvideo-id-face_klip1_....mp4   2.9 MB
+  ```
+  Wajahnya tetap sama persis di tengah frame (cx 0,494..0,506 di kedua kasus),
+  jadi bukan soal akurasi — tapi ukuran file naik 3x dan tiap frame harus
+  di-encode ulang karena posisinya bergeser 1-2 piksel tiap sampel.
+- Dugaan penyebab: `write_sendcmd()` memakai deadband 1 piksel **di ruang
+  koordinat hasil scale** (yang untuk 1280x720 adalah 3414 piksel lebar, jadi
+  1 piksel hasil scale = 0,37 piksel sumber). Noise deteksi wajah ±1-2 piksel
+  selalu melewati deadband itu, jadi crop berpindah-pindah terus. Setiap
+  pergeseran minuscule memaksa encoder membuat makroblok baru -> CRF 20 di
+  frame 1080x1920 jadi jauh lebih boros.
+- Perbaikan (lihat `fix.md` F-029).
+- Status: FIXED (lihat `fix.md` F-029)

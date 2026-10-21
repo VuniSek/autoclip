@@ -1091,6 +1091,18 @@ EXIT_MEANINGS = {
 }
 
 
+def face_model_report(project: Path) -> str:
+    """Cek model deteksi wajah yang tersedia di folder assets/ proyek."""
+    assets = project / "assets"
+    yunet = assets / "face_detection_yunet_2023mar.onnx"
+    haar = assets / "haarcascade_frontalface_default.xml"
+    if yunet.is_file():
+        return f"yunet ({yunet.stat().st_size // 1024} KB) - akurat"
+    if haar.is_file():
+        return "haar (cadangan) - kurang akurat untuk wajah miring/kecil"
+    return "tidak ada - face tracking tidak bisa jalan, crop tengah saja"
+
+
 def report(code: int, output_dir: Path, started: float) -> int:
     files = collect_outputs(output_dir)
     rule("Laporan akhir")
@@ -1129,8 +1141,10 @@ def build_parser() -> argparse.ArgumentParser:
         prog="autoclip_colab",
         description="Jalankan AUTO CLIP di Google Colab: install, config, pipeline, ambil hasil.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="Argumen tambahan untuk main.py ditulis setelah --, "
-               "mis. --max-clips 3 --keep-temp --verbose",
+        epilog=(
+            "Argumen tambahan untuk main.py ditulis setelah --, "
+            "mis. --max-clips 3 --keep-temp --verbose --face-sample-fps 20"
+        ),
     )
     parser.add_argument("--input", "-i", help="URL video atau path file lokal (mis. /content/drive/...)")
     parser.add_argument("--repo", help="URL git repo AUTO CLIP (https://github.com/USER/autoclip.git) "
@@ -1220,6 +1234,7 @@ def main(argv: list[str] | None = None) -> int:
             log("Penyebab GPU tidak dipakai:")
             log(explain_cuda_failure(diag, gpu))
         log(f".env device      : {read_env(env_path).get('WHISPER_DEVICE', '(kosong)')}")
+        log(f"Wajah            : {face_model_report(project)}")
         return 0
 
     step(5, 5, "Pipeline")

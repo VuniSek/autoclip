@@ -64,6 +64,7 @@ Aturan ini WAJIB dipatuhi dan dibaca ulang setiap sesi.
 ```
 autoclip/
 ├── AGENTS.md
+├── CARA_PAKAI.md       # resep perintah siap pakai (lokal + Colab) untuk user
 ├── problem.md          # jurnal masalah (tulis DULU sebelum fix)
 ├── fix.md              # jurnal perbaikan (tulis SETELAH berhasil)
 ├── .env                # diisi pengguna, JANGAN dicommit
@@ -151,6 +152,9 @@ Opsi berguna:
 | `--max-clips N` | override `MAX_CLIPS` |
 | `--min-seconds N` / `--max-seconds N` | override durasi klip |
 | `--face-tracking` / `--no-face-tracking` | paksa ikut wajah / crop tengah |
+| `--face-sample-fps N` | override `FACE_TRACK_SAMPLE_FPS` (deteksi wajah per detik) |
+| `--face-smooth N` | override `FACE_TRACK_SMOOTH` (jendela perataan lintasan) |
+| `--face-detect-width N` | override `FACE_DETECT_WIDTH` (lebar frame deteksi) |
 | `--reuse-transcript` | pakai `temp/transcript.json`, lewati transkripsi (hemat waktu) |
 | `--merge` / `--no-merge` | gabungkan semua klip jadi satu video (default dari `.env` `MERGE_CLIPS`) |
 | `--keep-temp` | jangan bersihkan `temp/` |
@@ -209,6 +213,25 @@ File itu mengurus FFmpeg (apt tanpa `sudo`), `pip install -r requirements.txt` d
 `sys.executable`, pustaka CUDA 12 + `LD_LIBRARY_PATH` untuk faster-whisper di GPU,
 `.env` dari Colab Secrets (model wajib `:free`, API key tidak pernah di-log), retry CPU
 bila GPU gagal, lalu zip hasil untuk diunduh. Semua aturan di AGENTS.md tetap berlaku.
+
+**Face tracking di Colab:**
+
+```python
+!python autoclip_colab.py -i "<URL>" --model <nama-model:free> \
+    --face-tracking \
+    -- --face-sample-fps 20 --face-smooth 3
+```
+
+- Folder `assets/` **wajib** ikut ter-clone (isi model deteksi wajah
+  `face_detection_yunet_2023mar.onnx`). Kalau tidak ikut, face tracking
+  otomatis fallback ke crop tengah (tidak error).
+- `autoclip_colab.py --check-env` mencetak baris `Wajah : yunet (227 KB) - akurat`
+  (atau `haar` / `tidak ada`) sebagai pemeriksa cepat.
+- Argumen setelah `--` diteruskan ke `main.py`; `--face-tracking` milik
+  `autoclip_colab.py` menulis `FACE_TRACKING=true` ke `.env` (berlaku untuk
+  percobaan berikutnya di runtime yang sama).
+- Face tracking menambah sekitar 10–20 detik per klip (deteksi wajah jalan di
+  CPU).
 
 ---
 

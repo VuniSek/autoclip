@@ -986,3 +986,66 @@
   interval #0") dan program diam-diam memakai fallback crop tengah. Pelajaran:
   kalau hasil render tiba-tiba "fallback", periksa dulu pesan error FFmpeg-nya
   (kode lama hanya mencetak "face tracking gagal saat render").
+
+## F-029 | memperbaiki P-029 (file hasil face tracking 3x lebih besar)
+- Perubahan (file dan apa yang diubah):
+  - `src/clipper.py` -> `plan_face_crop()`: deadband perintah `sendcmd` bukan lagi
+    1 piksel tetap, tapi `max(2, out_w * 0.004)` -> ~4 piksel di frame hasil
+    1080x1920 (0,4% lebar, di bawah batas penglihatan).
+  - `src/face_track.py` -> `write_sendcmd()`: parameter `deadband` sekarang
+    punya penjelasan (goyang kecil -> file jauh lebih besar).
+- Alasan: deadband 1 piksel **di ruang hasil scale** (3414 piksel lebar untuk
+  1280x720) sama dengan 0,37 piksel sumber, jadi noise deteksi wajah selalu
+  lolos dan crop terus bergeser. deadband 0,4% lebar frame hasil cukup besar
+  untuk memblokir noise, tapi tetap jauh di bawah yang terlihat.
+- Hasil pengujian ulang:
+  - Video uji dengan wajah **diam**, klip 38 detik: file hasil **9,2 MB ->
+    2,9 MB** (kembali seperti crop statis), sedangkan posisi wajah tetap
+    0,494..0,506 (tepat di tengah) dan terdeteksi di 950/950 frame.
+  - `tests/test_face_tracking.py` tetap **LULUS** (7 bagian): lintasan bergerak
+    (60 perintah, nilai berubah-ubah), wajah di 150/150 frame, simpangan dari
+    tengah maks 5,8%.
+- Catatan: pelajaran F-026 (ukur jangan kira-kira) lagi: masalah "file jadi
+  besar" baru ketahuan karena **ukur ukuran file**, bukan karena dikeluh.
+
+## F-028b | tambahan F-028 (opsi CLI face tracking + panduan cara pakai)
+- Perubahan (file dan apa yang diubah):
+  - `main.py`: tiga opsi CLI baru yang **menimpa** nilai `.env` untuk satu kali
+    jalan: `--face-sample-fps`, `--face-smooth`, `--face-detect-width`.
+    `resolve_face_settings()` collects nilai (CLI menang atas `.env`), log baris
+    `#face: sampel=.../detik perataan=... lebar_deteksi=...px` dicetak kalau
+    face tracking aktif, dan nilainya diteruskan ke `cut_clip()`.
+  - `autoclip_colab.py`:
+    - `face_model_report()` + baris baru di `--check-env`:
+      `Wajah : yunet (227 KB) - akurat` (atau `haar` / `tidak ada`).
+    - epilog `--help` menyebut `-- --face-sample-fps 20` sebagai contoh
+      argumen yang diteruskan ke `main.py`.
+  - `CARA_PAKAI.md` (file baru, 278 baris): resep perintah siap pakai —
+    persiapan, cara paling sederhana, **cara crop ikut wajah** (+ cara
+    menyetel kepekaan/keelusan), gabung klip, subtitle, hemat waktu, YouTube
+    bot check, dan bagian **Google Colab** lengkap (persiapan, `--check-env`,
+    clone, contoh perintah dengan `--face-tracking`, tabel aturan Colab,
+    rate limit model gratis) + daftar lengkap semua opsi.
+  - `README.md`: tabel "Yang Bisa Dilakukan" (fitur -> cara pakai), bagian
+    "Crop yang Mengikuti Wajah" (tabel sebelum/sesudah, 4 langkah, tabel
+    penyesuaian), bagian "Face tracking di Colab", baris troubleshooting
+    model wajah, dan tautan ke `CARA_PAKAI.md`.
+  - `AGENTS.md`: opsi CLI baru di tabel, bagian "Face tracking di Colab",
+    `CARA_PAKAI.md` di struktur proyek.
+- Alasan: pengaturan face tracking sebelumnya hanya bisa diubah lewat `.env`,
+  jadi harus mengedit file tiap kali mau bereksperimen. Pola yang sudah ada
+  di proyek (`--max-clips` menimpa `MAX_CLIPS`, `--progress-seconds` menimpa
+  `DOWNLOAD_PROGRESS_SECONDS`) diterapkan juga ke face tracking, sehingga
+  "--face-sample-fps 20" bisa dipakai tanpa menyentuh `.env` — termasuk lewat
+  Colab (`-- --face-sample-fps 20`).
+- Hasil pengujian ulang:
+  - `main.py --help` menampilkan 3 opsi baru dengan benar; tidak ada galat
+    argparse (pelajaran P-018: jalur baru harus dijalankan, bukan hanya ditulis).
+  - Alur penuh `main.py --face-tracking --face-sample-fps 15 --face-smooth 7`:
+    log `#face: sampel=15/detik perataan=7 lebar_deteksi=640px`, 570/570 sampel
+    wajah terdeteksi, 1 klip 1080x1920.
+  - Jalur Colab `autoclip_colab.py --face-tracking -- --face-sample-fps 12
+    --face-smooth 3 --max-clips 1`: exit 0, 6 file hasil, zip terbentuk
+    (11,5 MB).
+  - `autoclip_colab.py --check-env --skip-install` menampilkan baris baru
+    `Wajah : yunet (227 KB) - akurat`.

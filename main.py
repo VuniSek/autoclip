@@ -85,6 +85,28 @@ def parse_args() -> argparse.Namespace:
     p.add_argument(
         "--no-face-tracking", action="store_true", help="Paksa crop tengah"
     )
+    p.add_argument(
+        "--face-sample-fps", type=float, default=None,
+        help=(
+            "Berapa kali deteksi wajah per detik saat face tracking "
+            "(default FACE_TRACK_SAMPLE_FPS=10). Makin tinggi makin akurat, "
+            "makin lambat."
+        ),
+    )
+    p.add_argument(
+        "--face-smooth", type=int, default=None,
+        help=(
+            "Jendela perataan lintasan wajah (default FACE_TRACK_SMOOTH=5). "
+            "1 = mengikuti apa adanya, 9 = sangat halus."
+        ),
+    )
+    p.add_argument(
+        "--face-detect-width", type=int, default=None,
+        help=(
+            "Lebar frame untuk deteksi wajah (default FACE_DETECT_WIDTH=640). "
+            "640 = cepat, 1280 = lebih rinci."
+        ),
+    )
     p.add_argument("--keep-temp", action="store_true", help="Jangan hapus folder temp/")
     p.add_argument(
         "--cookies", default=None,
@@ -144,6 +166,25 @@ def resolve_merge(args: argparse.Namespace, cfg: Config) -> bool:
     return cfg.merge_clips
 
 
+def resolve_face_settings(args: argparse.Namespace, cfg: Config) -> dict:
+    """Pengaturan face tracking: CLI menang atas nilai di `.env`."""
+    return {
+        "face_sample_fps": (
+            args.face_sample_fps
+            if args.face_sample_fps is not None
+            else cfg.face_track_sample_fps
+        ),
+        "face_smooth": (
+            args.face_smooth if args.face_smooth is not None else cfg.face_track_smooth
+        ),
+        "face_detect_width": (
+            args.face_detect_width
+            if args.face_detect_width is not None
+            else cfg.face_detect_width
+        ),
+    }
+
+
 def process_one(
     source: str,
     cfg: Config,
@@ -156,10 +197,17 @@ def process_one(
     min_sec = args.min_seconds if args.min_seconds is not None else cfg.clip_min_seconds
     max_sec = args.max_seconds if args.max_seconds is not None else cfg.clip_max_seconds
     language = args.language or cfg.language
+    face_opts = resolve_face_settings(args, cfg)
 
     log(f"\n{'#' * 60}")
     log(f"# VIDEO {index}: {source}")
     log(f"#clip: {min_sec}-{max_sec}s | max_clips={max_clips} | face_tracking={face_tracking}")
+    if face_tracking:
+        log(
+            f"#face: sampel={face_opts['face_sample_fps']:g}/detik "
+            f"perataan={face_opts['face_smooth']} "
+            f"lebar_deteksi={face_opts['face_detect_width']}px"
+        )
     log(f"{'#' * 60}")
 
     # --- 1. Ambil video + ekstrak audio ---
@@ -246,9 +294,7 @@ def process_one(
             out_path=out_video,
             face_tracking=face_tracking,
             burn_subtitle=ass_path,
-            face_sample_fps=cfg.face_track_sample_fps,
-            face_smooth=cfg.face_track_smooth,
-            face_detect_width=cfg.face_detect_width,
+            **face_opts,
         )
         # salin .srt ke output juga (dari slice yang sama, tanpa subtitle burn)
         log(f"      subtitle: {ass_path.name}, {srt_path.name}")

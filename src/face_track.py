@@ -461,8 +461,9 @@ def write_sendcmd(
     awal klip, dalam detik). Setiap perintah **wajib** diakhiri tanda ``;``:
     file ``sendcmd`` dibaca sebagai satu daftar perintah yang dipisah ``;``,
     dan tanpa tanda itu FFmpeg menolak filenya ("Missing separator or
-    extraneous data"). Perintah yang nilainya tidak berubah dilewati supaya
-    filenya tetap kecil.
+    extraneous data"). Perintah yang nilainya berubah kurang dari ``deadband``
+    dilewati supaya filenya tetap kecil dan crop tidak "goyang" 1-2 piksel
+    (goyang sekecil itu juga bikin encoder menghasilkan file jauh lebih besar).
     """
     lines: list[str] = []
     previous: int | None = None
