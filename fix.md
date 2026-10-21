@@ -895,3 +895,94 @@
     ringkasan, tersalin ke `--drive-dir`, dan ada di dalam zip
     (`output/00_testvideo-id_gabungan.mp4`).
   - Regresi: seluruh test lama lulus (lihat daftar di bagian F-026).
+
+## F-028 | memperbaiki P-028 (face tracking: crop diam -> crop bergerak mengikuti wajah)
+- Perubahan (file dan apa yang diubah):
+  - `src/face_track.py` (file baru, ~470 baris):
+    - `FaceDetector`: detektor utama **YuNet** (DNN, `cv2.FaceDetectorYN`,
+      model `assets/face_detection_yunet_2023mar.onnx` 227 KB dari opencv_zoo),
+      cadangan **Haar cascade** (`assets/haarcascade_frontalface_default.xml`).
+      Frame diperkecil ke `FACE_DETECT_WIDTH` (default 640 px) supaya deteksi
+      cepat, lalu koordinat dikembalikan ke skala asli. Wajah yang lebih kecil
+      dari `min_face_ratio` dibuang (anti false positive).
+    - `track_faces()`: sampel wajah pada interval tetap (default 10 Hz). Video
+      dibaca **berurutan** (seek sekali di awal, lalu `grab()` untuk melompati
+      frame yang tidak perlu) supaya posisi sampel presisi.
+    - `_pick_face()`: memilih wajah **terbesar yang masih dekat** dengan posisi
+      sebelumnya -> tidak berganti orang saat ada dua wajah di frame.
+    - `smooth_track()`: celah diisi (interpolasi linear, tahan di ujung),
+      outlier dibuang dengan filter median, lalu dirata-rata (jendela
+      `FACE_TRACK_SMOOTH`, default 5).
+    - `crop_positions()`: landscape -> crop bergerak **horizontal** (wajah dikejar
+      ke tengah); portrait -> crop bergerak **vertikal** (wajah di 1/4 tinggi
+      frame, bukan tengah, supaya ada ruang untuk subtitle).
+    - `write_sendcmd()`: menulis file perintah `sendcmd` untuk filter `crop`
+      FFmpeg. Tiap perintah **wajib** diakhiri `;` (tanpa itu FFmpeg menolak
+      filenya: "Missing separator or extraneous data").
+  - `src/clipper.py`:
+    - `plan_face_crop()` (baru): menyusun rencana crop bergerak + file
+      perintah, mengembalikan objek `FaceCrop` (filter + file + statistik).
+    - `face_crop_filter()` (lama) tetap ada sebagai crop **statis** (posisi
+      median), sekarang memakai detektor baru.
+    - `cut_clip()` memakai `plan_face_crop()`; file perintah selalu dihapus
+      setelah render (`finally`), dan kalau render gagal -> fallback crop tengah.
+  - `src/config.py`: kunci baru `FACE_TRACK_SAMPLE_FPS` (default 10),
+    `FACE_TRACK_SMOOTH` (default 5), `FACE_DETECT_WIDTH` (default 640) +
+    validasi rentang + tampilannya di `public_summary()`.
+  - `main.py`: ketiga nilai itu diteruskan ke `cut_clip()`.
+  - `autoclip_colab.py`: ketiga kunci baru masuk `DEFAULTS` + `ENV_ORDER` supaya
+    tidak hilang saat `.env` ditulis ulang (pola P-023).
+  - `assets/face_detection_yunet_2023mar.onnx` (baru, 227 KB, opencv_zoo,
+    Apache-2.0) + `assets/test_face_portrait.jpg` (fixture uji, potret resmi
+    White House = domain publik) + `assets/README.md` (asal & lisensi).
+  - `tests/test_face_tracking.py` (baru, 7 bagian).
+  - `.env.example`, `README.md` (bagian "Crop yang Mengikuti Wajah" + tabel
+    `.env` + troubleshooting), `AGENTS.md` (struktur, aturan kode, pengujian).
+- Alasan:
+  1. Akar masalahnya bukan "deteksinya kurang sensitf", tapi **crop-nya diam**:
+     satu posisi median dipakai untuk seluruh durasi klip, jadi wajah yang
+     bergerak langsung keluar frame. Perbaikannya harus membuat jendela crop
+     **bergerak**, bukan hanya mendeteksi lebih sering.
+  2. FFmpeg bisa menggerakkan jendela crop saat render lewat filter `sendcmd`
+     + perintah `crop x <nilai>` (sudah diuji: crop bergeser tepat pada
+     waktunya). Jadi tidak perlu encode ulang per frame.
+  3. YuNet dipilih sebagai detektor utama karena Haar cascade hanya mengenali
+     wajah frontal dan sering gagal pada wajah kecil/miring; modelnya kecil
+     (227 KB), gratis, dan open source.
+  4. Pelajaran F-026 (ukur, jangan kira-kira) diterapkan: lebar/posisi diuji
+     dalam **piksel** terhadap ground truth Fixture, bukan dikagumi dari
+     tampilan.
+  5. Pelajaran P-023 (kunci `.env` boleh hilang kalau tidak dijaga) diterapkan:
+     kunci baru langsung masuk `DEFAULTS`/`ENV_ORDER` runner Colab.
+- Hasil pengujian ulang:
+  - **Bukti "sebelum"** (video uji 1280x720, wajah bergerak x=80 -> x=900):
+    crop lama diam di `crop=1080:1920:1216:0` -> wajah **hilang di 101 dari 200
+    frame** hasil render (t=0..2 dan t=6..7 tidak ada wajah sama sekali).
+  - **Bukti "sesudah"**: `[clipper] face tracking: 80/80 sampel wajah terdeteksi
+    (detektor yunet); crop bergerak mengikuti wajah.` -> wajah ada di
+    **200/200 frame**, posisi horizontal 0.458..0.547 (tengah = 0.500).
+  - Galat lintasan vs ground truth: rata-rata **0,9 px**, maks 25,9 px
+    (efek tepi jendela perataan di detik pertama).
+  - `tests/test_face_tracking.py` **lulus (7 bagian)**: 60/60 sampel terdeteksi,
+    galat lintasan rata-rata 6,2 px; render 1080x1920 dengan wajah di 150/150
+    frame dan simpangan dari tengah maks 5,8%; file `sendcmd` 60 baris,
+    semua diakhiri `;`, nilainya berubah-ubah (crop bergerak); video tanpa wajah
+    -> `plan_face_crop` mengembalikan `None` dan hasil tetap 1080x1920 (crop
+    tengah); perataan: celah terisi & deteksi liar 500 dibuang; sumber portrait
+    -> perintah `crop y` bergerak (y=77 -> 480) dan hasil tetap 1080x1920.
+  - Jalur cadangan: `FACE_MODEL_FILE` menunjuk file yang tidak ada ->
+    backend otomatis `haar` (80/80 sampel terdeteksi); folder `assets/` kosong
+    -> backend `none` -> `plan_face_crop` = None -> crop tengah.
+  - Alur penuh `main.py` (file lokal + mock OpenRouter, `--face-tracking`):
+    23 segmen transkripsi, 2 klip (380/380 dan 300/300 sampel wajah terdeteksi),
+    hasil 1080x1920; pada klip 1 wajah ada di 950/950 frame dengan cx
+    0.494..0.506 (tepat di tengah).
+  - Regresi: `test_highlight` 7/7, `test_progress`, `test_bot_check`,
+    `test_cuda_diagnostics`, `test_model_gratis`, `test_env_writer`,
+    `test_transcribe_cuda_fallback`, `test_subtitles`, `test_merge` semuanya
+    lulus; `main.py --help` dan `autoclip_colab.py --help` normal.
+- Catatan: file `sendcmd` **wajib** diakhiri `;` — ini sempat membuat FFmpeg
+  menolak filenya ("Missing separator or extraneous data found at the end of
+  interval #0") dan program diam-diam memakai fallback crop tengah. Pelajaran:
+  kalau hasil render tiba-tiba "fallback", periksa dulu pesan error FFmpeg-nya
+  (kode lama hanya mencetak "face tracking gagal saat render").

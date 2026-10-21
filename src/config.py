@@ -106,6 +106,9 @@ class Config:
     max_clips: int
     language: str
     face_tracking: bool
+    face_track_sample_fps: float
+    face_track_smooth: int
+    face_detect_width: int
     max_source_height: int
     download_progress_seconds: float
     merge_clips: bool
@@ -131,6 +134,9 @@ class Config:
             "MAX_CLIPS": self.max_clips,
             "LANGUAGE": self.language,
             "FACE_TRACKING": self.face_tracking,
+            "FACE_TRACK_SAMPLE_FPS": self.face_track_sample_fps,
+            "FACE_TRACK_SMOOTH": self.face_track_smooth,
+            "FACE_DETECT_WIDTH": self.face_detect_width,
             "MAX_SOURCE_HEIGHT": self.max_source_height,
             "DOWNLOAD_PROGRESS_SECONDS": self.download_progress_seconds,
             "MERGE_CLIPS": self.merge_clips,
@@ -189,6 +195,21 @@ def _validate(cfg: Config) -> Config:
             f"DOWNLOAD_PROGRESS_SECONDS ({cfg.download_progress_seconds:g}) harus antara "
             "0 (hanya tampilkan tiap 10%) dan 3600."
         )
+    if not 1.0 <= cfg.face_track_sample_fps <= 60.0:
+        raise ConfigError(
+            f"FACE_TRACK_SAMPLE_FPS ({cfg.face_track_sample_fps:g}) harus antara 1 dan 60 "
+            "(berapa kali deteksi wajah dilakukan per detik)."
+        )
+    if not 1 <= cfg.face_track_smooth <= 31:
+        raise ConfigError(
+            f"FACE_TRACK_SMOOTH ({cfg.face_track_smooth}) harus antara 1 dan 31 "
+            "(jendela perataan lintasan wajah; nilai ganjil yang dipakai)."
+        )
+    if not 160 <= cfg.face_detect_width <= 4096:
+        raise ConfigError(
+            f"FACE_DETECT_WIDTH ({cfg.face_detect_width}) harus antara 160 dan 4096 "
+            "(lebar frame yang dipakai untuk deteksi wajah)."
+        )
 
     return cfg
 
@@ -219,6 +240,15 @@ def load_config(env_path: str | Path | None = None) -> Config:
         max_clips=_parse_int(os.getenv("MAX_CLIPS"), "MAX_CLIPS", 5),
         language=os.getenv("LANGUAGE", "id") or "id",
         face_tracking=_parse_bool(os.getenv("FACE_TRACKING"), "FACE_TRACKING"),
+        face_track_sample_fps=_parse_float(
+            os.getenv("FACE_TRACK_SAMPLE_FPS"), "FACE_TRACK_SAMPLE_FPS", 10.0
+        ),
+        face_track_smooth=_parse_int(
+            os.getenv("FACE_TRACK_SMOOTH"), "FACE_TRACK_SMOOTH", 5
+        ),
+        face_detect_width=_parse_int(
+            os.getenv("FACE_DETECT_WIDTH"), "FACE_DETECT_WIDTH", 640
+        ),
         max_source_height=_parse_int(os.getenv("MAX_SOURCE_HEIGHT"), "MAX_SOURCE_HEIGHT", 1080),
         download_progress_seconds=_parse_float(
             os.getenv("DOWNLOAD_PROGRESS_SECONDS"), "DOWNLOAD_PROGRESS_SECONDS", 15.0

@@ -246,6 +246,9 @@ def process_one(
             out_path=out_video,
             face_tracking=face_tracking,
             burn_subtitle=ass_path,
+            face_sample_fps=cfg.face_track_sample_fps,
+            face_smooth=cfg.face_track_smooth,
+            face_detect_width=cfg.face_detect_width,
         )
         # salin .srt ke output juga (dari slice yang sama, tanpa subtitle burn)
         log(f"      subtitle: {ass_path.name}, {srt_path.name}")

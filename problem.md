@@ -785,3 +785,64 @@
      otomatis ikut tersalin ke `--drive-dir` dan masuk zip hasil.
   5. `tests/test_merge.py` (baru, 6 bagian).
 - Status: FIXED (lihat `fix.md` F-027)
+
+## P-028 | face tracking tidak akurat (wajah keluar frame saat orang bergerak)
+- Waktu: 2026-10-22 00:45
+- File/langkah terkait: `src/clipper.py` -> `_face_x_center()` + `face_crop_filter()`,
+  langkah 4/5 "Membuat subtitle dan memotong klip 9:16" (`FACE_TRACKING=true`)
+- Pesan error / gejala (salin apa adanya, tanpa API key):
+  ```
+  Keluhan pengguna: "face tracking kurang akurat"
+
+  # Uji: video 1280x720, 8 detik, wajah bergerak x=80 -> x=900 (102,5 px/detik)
+  $ venv/bin/python -c "... _face_x_center(v, 0.0, 8.0) ..."
+  LAMA: pusat wajah (0..1) = 0.5142578125 -> crop diam di tengah
+  LAMA: filter = scale=3414:1920,crop=1080:1920:1216:0,setsar=1
+
+  # posisi wajah di frame hasil render (0.5 = tengah frame; 1080 px = 1.0):
+  t=0.0s  WAJAH TIDAK TERDETEKSI
+  t=1.0s  WAJAH TIDAK TERDETEKSI
+  t=2.0s  WAJAH TIDAK TERDETEKSI
+  t=3.0s  cx=0.233
+  t=4.0s  cx=0.489
+  t=5.0s  cx=0.741
+  t=6.0s  WAJAH TIDAK TERDETEKSI
+  t=7.0s  WAJAH TIDAK TERDETEKSI
+  ```
+  Wajah hilang dari frame selama +/- 5 detik dari klip 8 detik (oleh karena itu
+  "kurang akurat" padahal program tidak error sama sekali).
+- Dugaan penyebab:
+  1. **Crop-nya diam, bukan pelacak yang bergerak.** `_face_x_center()` menghitung
+     **median** dari 7 sampel posisi wajah, lalu `face_crop_filter()` memakai
+     **satu** nilai `x` statis untuk seluruh durasi klip. Orang yang bergerak
+     (atau kamera yang berputar) langsung keluar dari jendela crop.
+  2. **Sampel terlalu jarang dan tidak presisi.** 7 titik per klip (jarak ~1,1
+     detik) memakai `cap.set(CAP_PROP_POS_FRAMES)` untuk tiap sampel, jadi
+     posisi frame bisa meleset ke frame terdekat.
+  3. **Tidak ada konsistensi temporal.** Semua wajah yang terdeteksi (bisa lebih
+     dari satu orang, atau false positive Haar) langsung masuk ke perhitungan
+     median, sehingga hasil bisa berayun antar orang.
+  4. **Tidak ada perataan lintasan**, jadi kalau nanti crop digerakkan, semua
+     guncangan noise ikut terbawa.
+  5. **Detektor Haar frontal saja.** Wajah miring/profil, wajah kecil, dan
+     pencahayaan buruk gagal dideteksi; `cv2 5.0` bahkan sudah tidak
+     menyertakan cascade `.xml` (lihat P-006), jadi program hanya bisa
+     mengandalkan berkas `assets/`.
+  6. **Tidak ada batas kecepatan gerak crop**, jadi lonjakan deteksi sesaat
+     (salah deteksi) akan membuat kamera terlempar.
+- Perbaikan (lihat `fix.md` F-028):
+  1. `src/face_track.py` (baru): deteksi wajah per sampel waktu dengan **YuNet**
+     (DNN, model ONNX 227 KB di `assets/`, Haar cascade sebagai cadangan),
+     pemilihan wajah yang konsisten antar waktu, pengisian celah, dan perataan
+     lintasan (median + rata-rata bergerak).
+  2. Jendela crop **bergerak**: lintasan diubah menjadi perintah `sendcmd`
+     (`<waktu> crop x <nilai>;`) untuk filter `crop` FFmpeg, jadi wajah
+     dikejar ke tengah frame sepanjang klip — bukan satu posisi diam.
+  3. Sumber portrait dilacak **vertikal** (wajah di 1/4 tinggi frame, bukan
+     tengah) supaya ada ruang untuk subtitle.
+  4. Fallback tetap ada: wajah tidak terdeteksi -> crop tengah; render gagal
+     -> crop tengah; tidak ada model -> crop tengah.
+  5. Kunci `.env` baru: `FACE_TRACK_SAMPLE_FPS`, `FACE_TRACK_SMOOTH`,
+     `FACE_DETECT_WIDTH` (juga masuk `DEFAULTS`/`ENV_ORDER` runner Colab).
+  6. `tests/test_face_tracking.py` (baru, 7 bagian).
+- Status: FIXED (lihat `fix.md` F-028)

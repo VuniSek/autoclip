@@ -77,10 +77,11 @@ autoclip/
 │   ├── downloader.py   # yt-dlp untuk URL, atau pakai file lokal
 │   ├── transcriber.py  # faster-whisper, timestamp per kata, simpan JSON
 │   ├── highlight.py    # panggil OpenRouter untuk memilih segmen terbaik
-│   ├── clipper.py      # FFmpeg: potong, crop 9:16
+│   ├── clipper.py      # FFmpeg: potong, crop 9:16 (statis atau ikut wajah)
+│   ├── face_track.py   # deteksi wajah (YuNet/Haar) + lintasan -> perintah sendcmd
 │   ├── merger.py       # FFmpeg concat: gabungkan semua klip jadi satu video
 │   └── subtitles.py    # buat .ass/.srt dari timestamp kata, bakar ke video
-├── assets/            # Haar cascade untuk face tracking
+├── assets/            # model deteksi wajah (YuNet ONNX + Haar cascade) + fixture uji
 ├── tests/             # mock OpenRouter + uji modul
 ├── input/
 ├── temp/
@@ -107,6 +108,9 @@ autoclip/
 - Jika model gagal berulang kali → tulis ke `problem.md`, jangan diam-diam ganti model.
 - Face tracking hanya jalan jika `FACE_TRACKING=true`, dan **harus fallback ke crop
   tengah** jika gagal.
+- Face tracking **harus bergerak**, bukan satu posisi diam: wajah di-lacak per sampel
+  waktu, lintasan diperrata, lalu jendela crop digerakkan lewat `sendcmd` + filter
+  `crop` FFmpeg (lihat `src/face_track.py` dan `problem.md` P-028).
 - Semua stderr/stdout log tidak boleh membocorkan API key.
 
 ---
@@ -181,6 +185,9 @@ venv/bin/python tests/test_subtitles.py
 
 # uji penggabungan klip (FFmpeg concat + encode ulang + verifikasi ffprobe)
 venv/bin/python tests/test_merge.py
+
+# uji face tracking: deteksi, lintasan, crop bergerak, fallback crop tengah
+venv/bin/python tests/test_face_tracking.py
 
 # diagnosis lingkungan Colab (GPU, pustaka CUDA, device di .env)
 venv/bin/python autoclip_colab.py --check-env

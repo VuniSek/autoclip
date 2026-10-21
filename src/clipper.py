@@ -1,15 +1,29 @@
 """Potong segmen dengan FFmpeg dan ubah ke 9:16 (1080x1920).
 
-Default: crop tengah. Jika FACE_TRACKING=true, coba MediaPipe FaceDetector
-untuk mengikuti wajah; bila gagal -> fallback ke crop tengah.
+Default: crop tengah. Jika FACE_TRACKING=true, lacak wajah sepanjang segmen
+(lintasan bergerak) lalu gerakkan jendela crop mengikuti wajah; bila wajah
+tidak terdeteksi -> fallback ke crop tengah.
 """
 
 from __future__ import annotations
 
 import json
 import subprocess
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+
+from .config import TEMP_DIR
+from .face_track import (
+    DEFAULT_DETECT_WIDTH,
+    DEFAULT_SAMPLE_FPS,
+    DEFAULT_SMOOTH_WINDOW,
+    FaceDetector,
+    crop_positions,
+    smooth_track,
+    track_faces,
+    write_sendcmd,
+)
 
 TARGET_W = 1080
 TARGET_H = 1920
@@ -73,93 +87,133 @@ def center_crop_filter(sw: int, sh: int, out_w: int = TARGET_W, out_h: int = TAR
 
 
 def _cascade_path() -> Path | None:
-    """Cari file Haar cascade: dulu paket cv2, lalu folder assets/ proyek."""
-    candidates: list[Path] = []
-    try:
-        import cv2
+    """Cari file Haar cascade (dipakai kalau model YuNet tidak tersedia)."""
+    from .face_track import HAAR_CASCADE_NAME, find_model_file
 
-        base = Path(cv2.data.haarcascades)
-        candidates.append(base / "haarcascade_frontalface_default.xml")
-    except Exception:
-        pass
-    candidates.append(
-        Path(__file__).resolve().parent.parent
-        / "assets"
-        / "haarcascade_frontalface_default.xml"
-    )
-    for c in candidates:
-        if c.exists():
-            return c
-    return None
+    return find_model_file(HAAR_CASCADE_NAME, allow_env=False)
 
 
 def _face_x_center(video: Path, start: float, duration: float) -> float | None:
     """Posisi horizontal pusat wajah (0..1) di dalam segmen. None bila tidak ketemu.
 
-    Meng pakai Haar cascade dari OpenCV. Alasannya: mediapipe >= 1.0 menghapus
-    modul ``mediapipe.solutions`` (Lihat problem.md P-006), sedangkan Haar
-    cascade sudah ikut paket opencv dan tidak butuh unduhan model tambahan.
+    Ini cuma **posisi diam** (median lintasan). Untuk crop yang benar-benar
+    bergerak mengikuti wajah, pakai :func:`plan_face_crop`.
     """
-    try:
-        import cv2
-        import numpy as np
-    except ImportError:
-        print("[clipper] opencv tidak terpasang; face tracking dilewati.")
-        return None
-
-    cascade_file = _cascade_path()
-    if cascade_file is None:
+    detector = FaceDetector()
+    if detector.backend == "none":
         print(
-            "[clipper] Haar cascade tidak ditemukan "
-            "(opsional: taruh assets/haarcascade_frontalface_default.xml)."
+            "[clipper] tidak ada model deteksi wajah "
+            "(taruh assets/face_detection_yunet_2023mar.onnx atau Haar cascade); "
+            "face tracking dilewati."
         )
         return None
 
-    cascade = cv2.CascadeClassifier(str(cascade_file))
-    if cascade.empty():
-        print(f"[clipper] Haar cascade gagal dimuat: {cascade_file}")
-        return None
-
-    cap = cv2.VideoCapture(str(video))
-    if not cap.isOpened():
-        print(f"[clipper] video tidak bisa dibuka untuk deteksi wajah: {video}")
+    track = track_faces(video, start, duration, detector, sample_fps=DEFAULT_SAMPLE_FPS)
+    xs = [x for x in track.xs if x is not None]
+    if not xs:
         return None
     try:
-        fps = cap.get(cv2.CAP_PROP_FPS) or 25.0
-        total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
-        n_samples = 7
-        step = max(1, int(fps * max(duration, 0.1) / n_samples))
-        start_frame = int(start * fps)
-        end_frame = start_frame + int(duration * fps) if duration else total
-        xs: list[float] = []
-        idx = start_frame
-        while idx < end_frame and (total == 0 or idx < total):
-            cap.set(cv2.CAP_PROP_POS_FRAMES, idx)
-            ok, frame = cap.read()
-            if not ok:
-                break
-            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-            faces = cascade.detectMultiScale(
-                gray, scaleFactor=1.1, minNeighbors=5, minSize=(40, 40)
-            )
-            width = frame.shape[1] or 1
-            for (x, y, w, h) in faces:
-                xs.append(float((x + w / 2.0) / width))
-            idx += step
-        if not xs:
-            return None
-        return float(np.median(xs))  # median tahan noise
-    except Exception as exc:  # noqa: BLE001
-        # jangan ditelan diam-diam: beri tahu, lalu pakai crop tengah
-        print(f"[clipper] deteksi wajah gagal ({exc}); fallback ke crop tengah.")
+        sw, _sh = get_video_size(Path(video))
+    except ClipError:
         return None
-    finally:
-        cap.release()
+    if sw <= 0:
+        return None
+    return float(sorted(xs)[len(xs) // 2]) / float(sw)
+
+
+def _escape_filter_path(path: Path) -> str:
+    """Escape path untuk dipakai di dalam string filter FFmpeg."""
+    return str(path).replace("\\", "/").replace(":", r"\:").replace("'", r"\'")
+
+
+@dataclass
+class FaceCrop:
+    """Rencana crop yang mengikuti wajah (jendela crop bergerak)."""
+
+    filter_str: str
+    commands_file: Path | None = None
+    samples: int = 0
+    detected: int = 0
+    backend: str = "none"
+
+    def cleanup(self) -> None:
+        """Hapus file perintah sementara (dipanggil setelah render)."""
+        if self.commands_file and self.commands_file.exists():
+            try:
+                self.commands_file.unlink()
+            except OSError:
+                pass
+
+
+def plan_face_crop(
+    video: Path,
+    start: float,
+    duration: float,
+    sw: int,
+    sh: int,
+    out_w: int = TARGET_W,
+    out_h: int = TARGET_H,
+    sample_fps: float = DEFAULT_SAMPLE_FPS,
+    smooth_window: int = DEFAULT_SMOOTH_WINDOW,
+    detect_width: int = DEFAULT_DETECT_WIDTH,
+    commands_dir: Path | None = None,
+) -> FaceCrop | None:
+    """Rencana crop yang mengikuti wajah, atau None bila wajah tidak terdeteksi.
+
+    Lintasan wajah dihitung dulu (deteksi -> pilih yang konsisten -> haluskan),
+    lalu dijadikan perintah ``sendcmd`` untuk filter ``crop`` FFmpeg supaya
+    jendela crop bergerak mengikuti wajah, bukan diam di satu tempat.
+    """
+    detector = FaceDetector(detect_width=detect_width)
+    if detector.backend == "none":
+        print(
+            "[clipper] tidak ada model deteksi wajah "
+            "(opsional: taruh assets/face_detection_yunet_2023mar.onnx); "
+            "fallback ke crop tengah."
+        )
+        return None
+
+    track = track_faces(video, start, duration, detector, sample_fps=sample_fps)
+    if track.detected == 0:
+        print("[clipper] wajah tidak terdeteksi; fallback ke crop tengah.")
+        return None
+
+    xs, ys = smooth_track(track, window=smooth_window)
+    axis, positions, scaled_w, scaled_h = crop_positions(
+        track, xs, ys, sw, sh, out_w, out_h
+    )
+    if not positions:
+        print("[clipper] lintasan wajah kosong; fallback ke crop tengah.")
+        return None
+
+    cmd_dir = Path(commands_dir) if commands_dir else TEMP_DIR
+    cmd_dir.mkdir(parents=True, exist_ok=True)
+    cmd_path = cmd_dir / (
+        f"facecmd_{int(round(start * 1000))}_{int(round(duration * 1000))}.cmd"
+    )
+    write_sendcmd(cmd_path, axis, positions)
+
+    first = int(round(positions[0][1]))
+    if axis == "x":
+        vf = f"scale={scaled_w}:{scaled_h},crop={out_w}:{out_h}:x={first}:y=0,setsar=1"
+    else:
+        vf = f"scale={scaled_w}:{scaled_h},crop={out_w}:{out_h}:x=0:y={first},setsar=1"
+    filter_str = f"sendcmd=f='{_escape_filter_path(cmd_path)}',{vf}"
+    return FaceCrop(
+        filter_str=filter_str,
+        commands_file=cmd_path,
+        samples=track.total,
+        detected=track.detected,
+        backend=detector.backend,
+    )
 
 
 def face_crop_filter(video: Path, start: float, duration: float,
                      sw: int, sh: int, out_w: int = TARGET_W, out_h: int = TARGET_H) -> str | None:
-    """Filter crop yang mengikuti wajah, atau None bila wajah tidak terdeteksi."""
+    """Filter crop STATIS yang mengikuti wajah, atau None bila tidak terdeteksi.
+
+    Untuk crop yang bergerak mengikuti wajah, pakai :func:`plan_face_crop`.
+    """
     center = _face_x_center(video, start, duration)
     if center is None:
         return None
@@ -185,6 +239,9 @@ def cut_clip(
     out_path: Path,
     face_tracking: bool = False,
     burn_subtitle: Path | None = None,
+    face_sample_fps: float = DEFAULT_SAMPLE_FPS,
+    face_smooth: int = DEFAULT_SMOOTH_WINDOW,
+    face_detect_width: int = DEFAULT_DETECT_WIDTH,
 ) -> Path:
     """Potong [start,end] dari video, ubah ke 9:16, simpan ke out_path."""
     out_path = Path(out_path)
@@ -194,10 +251,25 @@ def cut_clip(
     duration = max(0.5, end - start)
     vf = None
     used_face = False
+    face: FaceCrop | None = None
     if face_tracking:
-        vf = face_crop_filter(video, start, duration, sw, sh)
-        if vf:
+        face = plan_face_crop(
+            video,
+            start,
+            duration,
+            sw,
+            sh,
+            sample_fps=face_sample_fps,
+            smooth_window=face_smooth,
+            detect_width=face_detect_width,
+        )
+        if face is not None:
+            vf = face.filter_str
             used_face = True
+            print(
+                f"[clipper] face tracking: {face.detected}/{face.samples} sampel wajah "
+                f"terdeteksi (detektor {face.backend}); crop bergerak mengikuti wajah."
+            )
     if vf is None:
         vf = center_crop_filter(sw, sh)
 
@@ -223,10 +295,11 @@ def cut_clip(
     ]
     try:
         _run(cmd)
-    except ClipError:
+    except ClipError as exc:
         if used_face:
             # Fallback: crop tengah (sesuai aturan di AGENTS.md)
             print("[clipper] face tracking gagal saat render, fallback ke crop tengah.")
+            print(f"[clipper] alasan: {str(exc).splitlines()[0]}")
             vf_center = center_crop_filter(sw, sh)
             filters = [vf_center]
             if burn_subtitle is not None:
@@ -237,6 +310,9 @@ def cut_clip(
             _run(cmd2)
         else:
             raise
+    finally:
+        if face is not None:
+            face.cleanup()
 
     if not out_path.exists() or out_path.stat().st_size == 0:
         raise ClipError(f"Klip kosong: {out_path}")

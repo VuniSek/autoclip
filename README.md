@@ -57,6 +57,9 @@ Sisanya biarkan default dari `.env.example` (sudah cocok untuk kebanyakan kasus)
 | `MAX_CLIPS` | `5` | mau lebih banyak atau lebih sedikit klip per video |
 | `LANGUAGE` | `id` | video berbahasa lain (`en`, atau `auto`) |
 | `FACE_TRACKING` | `false` | `true` = crop ikut wajah, `false` = crop tengah |
+| `FACE_TRACK_SAMPLE_FPS` | `10` | berapa kali deteksi wajah per detik (makin tinggi makin akurat & makin lambat) |
+| `FACE_TRACK_SMOOTH` | `5` | jendela perataan lintasan wajah (`1` = mengikuti apa adanya, `9` = sangat halus) |
+| `FACE_DETECT_WIDTH` | `640` | lebar frame untuk deteksi wajah (`640` = cepat, `1280` = lebih rinci) |
 | `MAX_SOURCE_HEIGHT` | `1080` | turunkan ke `720` supaya unduhan jauh lebih cepat |
 | `DOWNLOAD_PROGRESS_SECONDS` | `15` | jarak antar baris progress unduhan; `0` = hanya tiap 10% |
 | `YT_COOKIES_FILE` | (kosong) | isi `cookies.txt` hanya kalau YouTube meminta verifikasi bot |
@@ -114,6 +117,33 @@ venv/bin/python main.py \
   --verbose
 ```
 
+### Crop yang Mengikuti Wajah (face tracking)
+
+```bash
+venv/bin/python main.py --input input/vidio-saya.mp4 --face-tracking
+```
+
+Kalau `--face-tracking` aktif, program **melacak wajah sepanjang klip** dan
+jendela crop 9:16 bergerak mengikuti wajah — orang yang jalan/bergeser tetap
+wajahnya di tengah frame, bukan terkunci di satu posisi.
+
+Cara kerjanya:
+
+1. Wajah dideteksi tiap `FACE_TRACK_SAMPLE_FPS` detik memakai **YuNet** (model
+   DNN di `assets/face_detection_yunet_2023mar.onnx`, 227 KB, gratis & open
+   source). Kalau modelnya tidak ada, program pakai Haar cascade bawaan
+   `assets/haarcascade_frontalface_default.xml`.
+2. Wajah yang dipilih adalah yang **paling besar dan paling konsisten** dengan
+   posisi sebelumnya, jadi tidak berganti orang di tengah.
+3. Lintasan diperrata (celah diisi, deteksi liar dibuang), lalu
+   dijadikan perintah `sendcmd` untuk filter `crop` FFmpeg sehingga crop
+   benar-benar bergerak.
+4. Kalau wajah **tidak terdeteksi sama sekali**, program otomatis fallback ke
+   crop tengah — jadi klip tetap jadi.
+
+Kalau hasilnya masih kurang mulus, naikkan `FACE_TRACK_SAMPLE_FPS=20` (lebih
+accurate, lebih lambat) atau turunkan `FACE_TRACK_SMOOTH=3` (lebih responsif).
+
 ### Gabungkan Semua Klip Jadi Satu Video
 
 ```bash
@@ -153,7 +183,8 @@ ke zip hasil dan ke `--drive-dir`.
 | `libcublas.so.12 is not found` | GPU tidak bisa dipakai. Otomatis turun ke CPU; kalau `WHISPER_DEVICE=cuda` dipaksa, ubah ke `cpu` + `int8`, atau jalankan lewat `autoclip_colab.py` |
 | `[colab] GPU ada tapi ctranslate2 tidak bisa memakainya -> fallback ke CPU` | Angka `[transcribe] device=cpu` muncul, padahal Colab punya GPU. Cek penyebabnya dengan `!python autoclip_colab.py --check-env` (baris `CUDA :` + daftar pustaka). Kalau muncul "TIDAK ADA di folder mana pun", program sudah mencoba `pip install --force-reinstall --no-deps nvidia-cublas-cu12 nvidia-cuda-runtime-cu12`; kalau masih gagal, **Restart runtime** lalu ulangi. Lihat [P-019](problem.md) dan [P-021](problem.md) |
 | `Transkripsi kosong` | Coba `--language auto` |
-| Wajah tidak terdeteksi | Otomatis fallback ke crop tengah, jadi aman |
+| Wajah tidak terdeteksi | Otomatis fallback ke crop tengah, jadi aman. Kalau wajah **terdeteksi tapi gerakannya kaku**, naikkan `FACE_TRACK_SAMPLE_FPS=20` dan turunkan `FACE_TRACK_SMOOTH=3` |
+| `[clipper] tidak ada model deteksi wajah` | Berkas `assets/face_detection_yunet_2023mar.onnx` hilang (mis. repo di-clone tanpa `assets/`). Taruh file itu kembali ke `assets/`, atau andalkan Haar cascade `assets/haarcascade_frontalface_default.xml` |
 
 Kalau program berhenti dengan pesan error, detail masalahnya otomatis ditulis ke
 `problem.md` — buka file itu untuk tahu penyebabnya. Kode keluarannya: `0` sukses,

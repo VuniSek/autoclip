@@ -815,6 +815,7 @@ ENV_ORDER = (
     "OPENROUTER_API_KEY", "OPENROUTER_MODEL", "OPENROUTER_BASE_URL",
     "WHISPER_MODEL", "WHISPER_DEVICE", "WHISPER_COMPUTE_TYPE",
     "CLIP_MIN_SECONDS", "CLIP_MAX_SECONDS", "MAX_CLIPS", "LANGUAGE", "FACE_TRACKING",
+    "FACE_TRACK_SAMPLE_FPS", "FACE_TRACK_SMOOTH", "FACE_DETECT_WIDTH",
     "MAX_SOURCE_HEIGHT", "DOWNLOAD_PROGRESS_SECONDS", "YT_COOKIES_FILE",
     "YT_PLAYER_CLIENTS", "MERGE_CLIPS",
 )
@@ -829,6 +830,9 @@ DEFAULTS = {
     "MAX_CLIPS": "5",
     "LANGUAGE": "id",
     "FACE_TRACKING": "false",
+    "FACE_TRACK_SAMPLE_FPS": "10",
+    "FACE_TRACK_SMOOTH": "5",
+    "FACE_DETECT_WIDTH": "640",
     # Kunci tambahan: harus sama dengan yang dibaca src/config.py, kalau tidak
     # nilainya hilang setiap kali `.env` ditulis ulang (lihat problem.md P-023).
     "MAX_SOURCE_HEIGHT": "1080",
