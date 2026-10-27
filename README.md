@@ -69,10 +69,25 @@ OPENROUTER_MODEL=google/gemini-2.0-flash-exp:free
 Kalau masih placeholder atau modelnya bukan `:free`, program berhenti dengan pesan error.
 Itu disengaja supaya kuota berbayar tidak kepakai tanpa disadari.
 
+**Pakai 9router / gateway OpenAI-compatible sendiri?** Isi base URL-nya sekali, lalu
+nama model dipakai apa adanya (tanpa auto-pilih, tanpa ditambahi `:free`):
+
+```dotenv
+OPENROUTER_BASE_URL=http://localhost:20128/v1      # atau URL ngrok, wajib berakhiran /v1
+OPENROUTER_API_KEY=<key dari dashboard 9router>
+OPENROUTER_MODEL=<nama model/combo persis seperti di dashboard>
+OPENROUTER_TIMEOUT=180
+```
+
+Matikan **Caveman Mode** di 9router untuk route ini (prompt pemadatnya bisa merusak JSON).
+Aturan `:free` hanya berlaku saat `OPENROUTER_BASE_URL` menunjuk `openrouter.ai`.
+
 Sisanya biarkan default dari `.env.example` (sudah cocok untuk kebanyakan kasus):
 
 | Variabel | Default | Kapan diubah |
 |---|---|---|
+| `OPENROUTER_BASE_URL` | `https://openrouter.ai/api/v1` | arahkan ke 9router/gateway sendiri (harus `/v1`) |
+| `OPENROUTER_TIMEOUT` | `120` | naikkan untuk combo 9router/ngrok yang lambat (detik) |
 | `WHISPER_MODEL` | `small` | `tiny`/`base` lebih cepat, `medium` lebih akurat |
 | `CLIP_MIN_SECONDS` / `CLIP_MAX_SECONDS` | `30` / `60` | mau klip lebih pendek atau lebih panjang |
 | `MAX_CLIPS` | `5` | mau lebih banyak atau lebih sedikit klip per video |

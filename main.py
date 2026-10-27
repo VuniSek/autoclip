@@ -268,6 +268,7 @@ def process_one(
         min_seconds=min_sec,
         max_seconds=max_sec,
         language=language,
+        timeout=cfg.llm_timeout,
     )
     segments = segments[:max_clips]
     log(f"  {len(segments)} segmen dipilih:")
@@ -356,19 +357,20 @@ def main() -> int:
         log(f"[ERROR UNDUH/TRANSKRIPSI] {exc}")
         return 4
     except highlight.HighlightError as exc:
+        endpoint = highlight.endpoint_label(cfg.openrouter_base_url)
         log(f"[ERROR HIGHLIGHT/LLM] {exc}")
-        log("[CATATAN] Model gratis OpenRouter sering rate limit. "
-            "Coba lagi nanti, ganti OPENROUTER_MODEL di .env dengan model :free lain, "
+        log(f"[CATATAN] Endpoint {endpoint} gagal memilih segmen. "
+            "Coba lagi nanti, periksa OPENROUTER_MODEL/OPENROUTER_BASE_URL di .env, "
             "atau perkecil durasi video.")
         # Dicatat ke problem.md dan TIDAK mengganti model secara diam-diam.
         try:
             record_problem(
-                title="OpenRouter gagal memilih segmen highlight",
+                title=f"{endpoint} gagal memilih segmen highlight",
                 step=f"langkah 3 (highlight), model={cfg.openrouter_model}",
                 symptom=str(exc)[:500],
                 cause=(
-                    "Model gratis OpenRouter bisa rate limit atau membalas di luar format "
-                    "JSON setelah semua percobaan ulang habis."
+                    "Model/endpoint bisa rate limit, tidak bisa dihubungi, atau membalas "
+                    "di luar format JSON setelah semua percobaan ulang habis."
                 ),
             )
         except OSError as werr:

@@ -10,6 +10,7 @@ import os
 import re
 from dataclasses import dataclass
 from pathlib import Path
+from urllib.parse import urlparse
 
 from dotenv import load_dotenv
 
@@ -46,10 +47,35 @@ class ConfigError(RuntimeError):
 FREE_ROUTER_MODELS = frozenset({"openrouter/free"})
 
 
-def model_is_free(model: str) -> bool:
-    """True kalau model dipastikan gratis: sufiks ':free' atau router gratis."""
+def is_openrouter(base_url: str) -> bool:
+    """True kalau base URL menunjuk layanan OpenRouter resmi (`openrouter.ai`)."""
+    raw = (base_url or "").strip()
+    if not raw:
+        return False
+    if "://" not in raw:
+        raw = "https://" + raw
+    host = (urlparse(raw).hostname or "").lower()
+    return host == "openrouter.ai" or host.endswith(".openrouter.ai")
+
+
+def model_is_free(model: str, base_url: str | None = None) -> bool:
+    """True kalau model dipastikan gratis.
+
+    - sufiks ':free' atau router gratis (`openrouter/free`) selalu diterima;
+    - endpoint OpenAI-compatible milik pengguna (mis. 9router di localhost atau
+      lewat tunnel/ngrok) dipakai apa adanya: model TIDAK dipilih otomatis dan
+      TIDAK ditambahi ':free'. Aturan ':free' hanya berlaku untuk OpenRouter
+      resmi (lihat problem.md P-030).
+
+    `base_url=None` mempertahankan perilaku lama (hanya cek nama model), jadi
+    pemanggil yang belum tahu endpoint tetap aman.
+    """
     name = (model or "").strip().lower()
-    return ":free" in name or name in FREE_ROUTER_MODELS
+    if not name:
+        return False
+    if ":free" in name or name in FREE_ROUTER_MODELS:
+        return True
+    return base_url is not None and not is_openrouter(base_url)
 
 
 def _mask(value: str) -> str:
@@ -98,6 +124,7 @@ class Config:
     openrouter_api_key: str
     openrouter_model: str
     openrouter_base_url: str
+    llm_timeout: int
     whisper_model: str
     whisper_device: str
     whisper_compute_type: str
@@ -126,6 +153,7 @@ class Config:
             "OPENROUTER_API_KEY": _mask(self.openrouter_api_key),
             "OPENROUTER_MODEL": self.openrouter_model,
             "OPENROUTER_BASE_URL": self.openrouter_base_url,
+            "OPENROUTER_TIMEOUT": self.llm_timeout,
             "WHISPER_MODEL": self.whisper_model,
             "WHISPER_DEVICE": self.whisper_device,
             "WHISPER_COMPUTE_TYPE": self.whisper_compute_type,
@@ -156,21 +184,41 @@ def _validate(cfg: Config) -> Config:
     if cfg.openrouter_model.strip().lower() in PLACEHOLDERS:
         problems.append(
             "OPENROUTER_MODEL masih placeholder. "
-            "Isi nama model gratis OpenRouter (harus berakhiran :free) di file .env."
+            "Isi nama model yang mau dipakai di file .env "
+            "(model ':free' untuk OpenRouter, atau nama model/combo dari gateway "
+            "OpenAI-compatible seperti 9router)."
         )
 
     if problems:
         raise ConfigError("Konfigurasi .env belum lengkap:\n  - " + "\n  - ".join(problems))
 
-    # Penegakan model gratis: BLOKIR KERAS. Proyek ini hanya mengizinkan model gratis,
-    # jadi model tanpa akhiran ':free' harus menghentikan program, bukan sekadar
-    # memberi peringatan (lihat problem.md P-010).
-    if not model_is_free(cfg.openrouter_model):
+    if not cfg.openrouter_base_url.lower().startswith(("http://", "https://")):
         raise ConfigError(
-            f"OPENROUTER_MODEL='{cfg.openrouter_model}' tidak berakhiran ':free'.\n"
-            "Proyek ini hanya mengizinkan model GRATIS. Ganti nilainya di .env dengan "
-            "nama model yang berakhiran ':free' (contoh: 'google/gemini-2.0-flash-exp:free').\n"
+            f"OPENROUTER_BASE_URL='{cfg.openrouter_base_url}' harus diawali "
+            "'http://' atau 'https://'.\n"
+            "Contoh OpenRouter: https://openrouter.ai/api/v1\n"
+            "Contoh 9router    : http://localhost:20128/v1 (atau URL ngrok, harus /v1)"
+        )
+
+    # Penegakan model gratis: BLOKIR KERAS untuk OpenRouter resmi (P-010/P-022).
+    # Endpoint OpenAI-compatible milik pengguna (mis. 9router) memakai model apa
+    # adanya: tidak dipilih otomatis dan tidak ditambahi ':free' (P-030).
+    if not model_is_free(cfg.openrouter_model, cfg.openrouter_base_url):
+        raise ConfigError(
+            f"OPENROUTER_MODEL='{cfg.openrouter_model}' tidak berakhiran ':free' "
+            f"dan endpoint-nya OpenRouter resmi ({cfg.openrouter_base_url}).\n"
+            "Proyek ini hanya mengizinkan model GRATIS di OpenRouter. Pilih model "
+            "yang berakhiran ':free' (contoh: 'google/gemini-2.0-flash-exp:free') "
+            "atau router gratis 'openrouter/free'.\n"
+            "Kalau memakai gateway OpenAI-compatible sendiri (mis. 9router), arahkan "
+            "OPENROUTER_BASE_URL ke gateway itu (mis. http://localhost:20128/v1) dan "
+            "nama model dipakai apa adanya.\n"
             "Daftar model gratis: https://openrouter.ai/models?max_price=0"
+        )
+
+    if not 10 <= cfg.llm_timeout <= 3600:
+        raise ConfigError(
+            f"OPENROUTER_TIMEOUT ({cfg.llm_timeout}) harus antara 10 dan 3600 detik."
         )
 
     if cfg.clip_min_seconds >= cfg.clip_max_seconds:
@@ -232,6 +280,7 @@ def load_config(env_path: str | Path | None = None) -> Config:
         openrouter_base_url=os.getenv(
             "OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1"
         ).rstrip("/"),
+        llm_timeout=_parse_int(os.getenv("OPENROUTER_TIMEOUT"), "OPENROUTER_TIMEOUT", 120),
         whisper_model=os.getenv("WHISPER_MODEL", "small"),
         whisper_device=os.getenv("WHISPER_DEVICE", "auto"),
         whisper_compute_type=os.getenv("WHISPER_COMPUTE_TYPE", "auto"),

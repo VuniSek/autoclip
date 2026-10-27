@@ -16,10 +16,40 @@ import random
 import re
 import time
 from typing import Any
+from urllib.parse import urlparse
 
 import requests
 
 DEFAULT_TIMEOUT = 120
+
+
+def _is_openrouter_url(base_url: str) -> bool:
+    """True kalau base URL menunjuk OpenRouter resmi (lihat P-030)."""
+    raw = (base_url or "").strip()
+    if not raw:
+        return False
+    if "://" not in raw:
+        raw = "https://" + raw
+    host = (urlparse(raw).hostname or "").lower()
+    return host == "openrouter.ai" or host.endswith(".openrouter.ai")
+
+
+def endpoint_label(base_url: str) -> str:
+    """Nama endpoint yang aman ditampilkan di log/pesan error (tanpa API key)."""
+    raw = (base_url or "").strip()
+    if not raw:
+        return "endpoint LLM"
+    if _is_openrouter_url(raw):
+        return "OpenRouter"
+    host = urlparse(raw if "://" in raw else "https://" + raw).hostname
+    return host or "endpoint LLM"
+
+
+def _sanitize(text: str, api_key: str) -> str:
+    """Pastikan API key tidak pernah ikut tercetak di pesan error."""
+    if api_key:
+        return text.replace(api_key, "***")
+    return text
 
 
 class HighlightError(RuntimeError):
@@ -284,9 +314,13 @@ def _call_once(
     headers = {
         "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json",
-        "HTTP-Referer": "https://github.com/autoclip",
-        "X-Title": "AUTO CLIP",
     }
+    if _is_openrouter_url(base_url):
+        # Header atribusi hanya relevan untuk OpenRouter; gateway lokal
+        # (9router) tidak perlu dan bisa menolak header asing.
+        headers["HTTP-Referer"] = "https://github.com/autoclip"
+        headers["X-Title"] = "AUTO CLIP"
+    label = endpoint_label(base_url)
     resp = requests.post(
         f"{base_url}/chat/completions",
         json=payload,
@@ -295,13 +329,33 @@ def _call_once(
     )
     if resp.status_code != 200:
         # Jangan dump body penuh karena bisa memuat info sensitif; ambil ringkas.
-        snippet = resp.text[:400].replace(api_key, "***")
-        raise HighlightError(f"HTTP {resp.status_code} dari OpenRouter: {snippet}")
-    data = resp.json()
+        snippet = _sanitize(resp.text[:400], api_key)
+        raise HighlightError(f"HTTP {resp.status_code} dari {label}: {snippet}")
     try:
-        return data["choices"][0]["message"]["content"] or ""
+        data = resp.json()
+    except ValueError as exc:
+        snippet = _sanitize(resp.text[:300], api_key)
+        raise HighlightError(f"Respons {label} bukan JSON: {snippet}") from exc
+    # Sebagian gateway (termasuk 9router) bisa membalas HTTP 200 berisi
+    # {"error": ...} tanpa choices. Pesan ini harus jelas, bukan KeyError.
+    if isinstance(data, dict) and data.get("error") and not data.get("choices"):
+        err = data.get("error")
+        if isinstance(err, dict):
+            err = err.get("message") or err
+        raise HighlightError(
+            f"{label} mengembalikan error tanpa choices: "
+            f"{_sanitize(str(err)[:300], api_key)}"
+        )
+    try:
+        content = data["choices"][0]["message"]["content"] or ""
     except (KeyError, IndexError, TypeError) as exc:
-        raise HighlightError(f"Respons OpenRouter tidak punya choices: {str(data)[:300]}") from exc
+        raise HighlightError(
+            f"Respons {label} tidak punya choices: "
+            f"{_sanitize(str(data)[:300], api_key)}"
+        ) from exc
+    if not content.strip():
+        raise HighlightError(f"Respons {label} kosong (content kosong).")
+    return content
 
 
 def select_highlights(
@@ -354,5 +408,5 @@ def select_highlights(
 
     raise HighlightError(
         f"Gagal mendapatkan segmen highlight setelah {max_retries} percobaan "
-        f"pada model '{model}'. Error terakhir: {last_err}"
+        f"pada model '{model}' via {endpoint_label(base_url)}. Error terakhir: {last_err}"
     )

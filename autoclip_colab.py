@@ -12,7 +12,8 @@ Yang ditangani file ini:
   4. Menyiapkan pustaka CUDA 12 untuk `ctranslate2` (faster-whisper di GPU), lalu
      memverifikasi `ctranslate2` benar-benar bisa melihat GPU.
   5. Menyusun `.env`: API key diambil dari Colab Secrets / variabel shell / prompt
-     tersamar. Model wajib berakhiran `:free` (aturan sama dengan src/config.py).
+     tersamar. Model ':free' hanya diwajibkan untuk OpenRouter resmi; gateway
+    OpenAI-compatible sendiri (mis. 9router) memakai nama model apa adanya (P-030).
   6. Menjalankan `main.py` dan meneruskan kode keluar + argumen CLI apa adanya.
   7. Mengambil hasil: menyalin ke Google Drive (opsional) lalu zip `output/`.
 
@@ -54,6 +55,7 @@ import time
 import zipfile
 from pathlib import Path
 from typing import NoReturn
+from urllib.parse import urlparse
 
 # ------------------------------------------------------------------ util dasar
 
@@ -806,13 +808,28 @@ PLACEHOLDERS = {
 COLAB_FREE_ROUTERS = frozenset({"openrouter/free"})
 
 
-def colab_model_is_free(model: str) -> bool:
-    """Sufiks ':free' ATAU router gratis (lihat src/config.py::model_is_free)."""
+def colab_is_openrouter(base_url: str) -> bool:
+    """True kalau base URL menunjuk OpenRouter resmi (lihat src/config.py)."""
+    raw = (base_url or "").strip()
+    if not raw:
+        return False
+    if "://" not in raw:
+        raw = "https://" + raw
+    host = (urlparse(raw).hostname or "").lower()
+    return host == "openrouter.ai" or host.endswith(".openrouter.ai")
+
+
+def colab_model_is_free(model: str, base_url: str | None = None) -> bool:
+    """Sufiks ':free' ATAU router gratis ATAU gateway milik pengguna (P-030)."""
     name = (model or "").strip().lower()
-    return ":free" in name or name in COLAB_FREE_ROUTERS
+    if not name:
+        return False
+    if ":free" in name or name in COLAB_FREE_ROUTERS:
+        return True
+    return base_url is not None and not colab_is_openrouter(base_url)
 
 ENV_ORDER = (
-    "OPENROUTER_API_KEY", "OPENROUTER_MODEL", "OPENROUTER_BASE_URL",
+    "OPENROUTER_API_KEY", "OPENROUTER_MODEL", "OPENROUTER_BASE_URL", "OPENROUTER_TIMEOUT",
     "WHISPER_MODEL", "WHISPER_DEVICE", "WHISPER_COMPUTE_TYPE",
     "CLIP_MIN_SECONDS", "CLIP_MAX_SECONDS", "MAX_CLIPS", "LANGUAGE", "FACE_TRACKING",
     "FACE_TRACK_SAMPLE_FPS", "FACE_TRACK_SMOOTH", "FACE_DETECT_WIDTH",
@@ -822,6 +839,7 @@ ENV_ORDER = (
 
 DEFAULTS = {
     "OPENROUTER_BASE_URL": "https://openrouter.ai/api/v1",
+    "OPENROUTER_TIMEOUT": "120",
     "WHISPER_MODEL": "small",
     "WHISPER_DEVICE": "auto",
     "WHISPER_COMPUTE_TYPE": "auto",
@@ -907,34 +925,48 @@ def resolve_env(project: Path, args: argparse.Namespace, gpu: bool) -> Path:
     api_key = resolve_api_key(existing.get("OPENROUTER_API_KEY", ""), args)
     model = (args.model or existing.get("OPENROUTER_MODEL", "")).strip()
 
+    base_url = (
+        existing.get("OPENROUTER_BASE_URL")
+        or colab_secret("OPENROUTER_BASE_URL")
+        or DEFAULTS["OPENROUTER_BASE_URL"]
+    ).strip()
     if not model:
         die(
             "OPENROUTER_MODEL belum diisi dan tidak ada di .env.\n"
-            "  Pilih satu model GRATIS dari https://openrouter.ai/models?max_price=0\n"
-            "  lalu jalankan ulang, mis.: --model google/gemini-2.0-flash-exp:free"
+            "  Untuk OpenRouter: pilih model GRATIS dari "
+            "https://openrouter.ai/models?max_price=0\n"
+            "  Untuk 9router/gateway sendiri: pakai nama model/combo persis seperti\n"
+            "  yang ada di dashboard gateway tersebut.\n"
+            "  Lalu jalankan ulang, mis.: --model google/gemini-2.0-flash-exp:free"
         )
-    if not colab_model_is_free(model):
-        # Aturan sama dengan src/config.py: blokir keras model berbayar
-        # (lihat problem.md P-010), router gratis tetap boleh (P-022).
+    if not colab_model_is_free(model, base_url):
+        # Aturan sama dengan src/config.py: blokir keras model berbayar hanya untuk
+        # OpenRouter resmi (P-010/P-022); gateway sendiri memakai model apa adanya
+        # (P-030).
         die(
             f"OPENROUTER_MODEL='{model}' tidak berakhiran ':free'.\n"
-            "  Proyek ini hanya mengizinkan model GRATIS. Pilih salah satu:\n"
+            f"  Endpoint yang dipakai OpenRouter resmi ({base_url}), jadi hanya model\n"
+            "  GRATIS yang diizinkan. Pilih salah satu:\n"
             f"  - router gratis yang otomatis pilih model free: {', '.join(sorted(COLAB_FREE_ROUTERS))}\n"
             "  - model gratis spesifik dari https://openrouter.ai/models?max_price=0\n"
-            "    (mis. --model google/gemini-2.0-flash-exp:free)"
+            "    (mis. --model google/gemini-2.0-flash-exp:free)\n"
+            "  Kalau memakai 9router/gateway OpenAI-compatible sendiri, isi\n"
+            "  OPENROUTER_BASE_URL di .env (mis. http://localhost:20128/v1 atau URL ngrok)."
         )
 
     # .env sudah benar untuk device yang sekarang dipakai -> jangan tulis ulang.
     if (existing.get("OPENROUTER_API_KEY") == api_key
             and existing.get("OPENROUTER_MODEL") == model
+            and existing.get("OPENROUTER_BASE_URL", DEFAULTS["OPENROUTER_BASE_URL"]) == base_url
             and bool(existing.get("WHISPER_DEVICE"))):
-        log(f"OPENROUTER_MODEL: {model} (model gratis, valid)")
+        log(f"OPENROUTER_MODEL: {model} (valid, endpoint {base_url})")
         return path
 
     values = dict(DEFAULTS)
     values.update(existing)
     values["OPENROUTER_API_KEY"] = api_key
     values["OPENROUTER_MODEL"] = model
+    values["OPENROUTER_BASE_URL"] = base_url
     if args.whisper_model:
         values["WHISPER_MODEL"] = args.whisper_model
     if args.face_tracking:
@@ -963,7 +995,7 @@ def resolve_env(project: Path, args: argparse.Namespace, gpu: bool) -> Path:
         path.chmod(0o600)
     except OSError:
         pass
-    log(f"OPENROUTER_MODEL: {model} (model gratis, valid)")
+    log(f"OPENROUTER_MODEL: {model} (valid, endpoint {base_url})")
     log(f".env ditulis: device={values['WHISPER_DEVICE']}, "
         f"compute={values['WHISPER_COMPUTE_TYPE']}, whisper={values['WHISPER_MODEL']}")
     return path
@@ -1120,10 +1152,12 @@ def report(code: int, output_dir: Path, started: float) -> int:
         log("  4) kalau tetap ditolak, tunggu beberapa jam atau ganti jaringan.")
     if code == 5:
         log("")
-        log("Model gratis OpenRouter sering kena rate limit. Cara mengatasi:")
+        log("Endpoint LLM gagal memilih segmen. Cara mengatasi:")
         log("  1) tunggu beberapa menit lalu ulangi dengan -- --reuse-transcript")
         log("     (transkripsi tidak diulang: hemat waktu dan kuota LLM);")
-        log("  2) ganti model di .env dengan model :free lain;")
+        log("  2) OpenRouter: ganti model di .env dengan model :free lain;")
+        log("     9router/gateway sendiri: pastikan gateway hidup, nama model/combo benar,")
+        log("     dan OPENROUTER_BASE_URL menunjuk ke /v1 (localhost atau URL ngrok);")
         log("  3) perkecil durasi video (mis. --max-seconds 40).")
     if code == 0 and not files:
         log("")
@@ -1151,7 +1185,13 @@ def build_parser() -> argparse.ArgumentParser:
                                        "untuk di-clone kalau proyek belum ada di disk")
     parser.add_argument("--env-file", help="Pakai file .env tertentu, bukan .env di proyek")
     parser.add_argument("--api-key", help="API key OpenRouter (lebih aman pakai Colab Secrets)")
-    parser.add_argument("--model", help="Nama model OpenRouter gratis, wajib berakhiran :free")
+    parser.add_argument(
+        "--model",
+        help=(
+            "Nama model yang dipakai. OpenRouter: wajib berakhiran :free. "
+            "9router/gateway sendiri: nama model/combo apa adanya."
+        ),
+    )
     parser.add_argument("--whisper-model", help="Model Whisper: tiny/base/small/medium/large-v3")
     parser.add_argument("--cpu", action="store_true", help="Paksa CPU walau GPU tersedia")
     parser.add_argument("--face-tracking", action="store_true", help="Crop mengikuti wajah")
@@ -1211,7 +1251,7 @@ def main(argv: list[str] | None = None) -> int:
     gpu = False if args.cpu else setup_cuda_libs(install=not args.skip_install)
     log(f"Mode   : {'GPU (cuda/float16)' if gpu else 'CPU (int8)'}")
 
-    step(4, 5, "Konfigurasi .env (model wajib :free)")
+    step(4, 5, "Konfigurasi .env (model & endpoint LLM)")
     env_path = resolve_env(project, args, gpu)
 
     if args.check_env:
@@ -1234,6 +1274,10 @@ def main(argv: list[str] | None = None) -> int:
             log("Penyebab GPU tidak dipakai:")
             log(explain_cuda_failure(diag, gpu))
         log(f".env device      : {read_env(env_path).get('WHISPER_DEVICE', '(kosong)')}")
+        env_now = read_env(env_path)
+        log(f"Endpoint LLM     : {env_now.get('OPENROUTER_BASE_URL') or '(kosong)'}")
+        log(f"Model LLM        : {env_now.get('OPENROUTER_MODEL') or '(kosong)'}")
+        log(f"Timeout LLM      : {env_now.get('OPENROUTER_TIMEOUT') or '120'} detik")
         log(f"Wajah            : {face_model_report(project)}")
         return 0
 

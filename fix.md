@@ -1049,3 +1049,88 @@
     (11,5 MB).
   - `autoclip_colab.py --check-env --skip-install` menampilkan baris baru
     `Wajah : yunet (227 KB) - akurat`.
+
+## F-030 | memperbaiki P-030 (9router / gateway OpenAI-compatible sendiri)
+- Perubahan (file dan apa yang diubah):
+  - `src/config.py`:
+    - `is_openrouter(base_url)` baru: True hanya untuk host `openrouter.ai`
+      (termasuk subdomain), dipakai untuk membedakan endpoint resmi vs gateway sendiri.
+    - `model_is_free(model, base_url=None)` sekarang sadar endpoint: sufiks `:free`
+      dan `openrouter/free` selalu diterima; untuk base URL selain OpenRouter model
+      dipakai apa adanya (tanpa auto-pilih, tanpa menambah `:free`). `base_url=None`
+      mempertahankan perilaku lama, dan nama model kosong tetap False.
+    - `_validate()`: blokir keras `:free` hanya untuk OpenRouter resmi, dengan pesan
+      yang menyebut cara memakai gateway sendiri. Validasi ringan base URL harus
+      diawali `http://`/`https://`, plus validasi `OPENROUTER_TIMEOUT` 10..3600 detik.
+    - Field baru `llm_timeout` (dari `OPENROUTER_TIMEOUT`, default 120) dan
+      tampilannya di `public_summary()`.
+  - `src/highlight.py`:
+    - `endpoint_label(base_url)` -> `OpenRouter` atau nama host (tanpa path/API key),
+      dipakai di semua pesan error dan log.
+    - Header `HTTP-Referer`/`X-Title` hanya dikirim ke OpenRouter; gateway lokal tidak
+      dikirimi header asing.
+    - Respons gateway ditangani lebih tegas: HTTP non-200, body bukan JSON,
+      HTTP 200 berisi `{"error": ...}` tanpa `choices`, `choices` kosong, dan
+      `content` kosong semuanya jadi `HighlightError` yang jelas.
+    - `_sanitize()` memastikan API key tidak pernah muncul di pesan error.
+    - Pesan kegagalan akhir menyebut model + endpoint yang dipakai.
+  - `main.py`: `timeout=cfg.llm_timeout` diteruskan ke `select_highlights()`;
+    catatan kegagalan dan entri `problem.md` otomatis tidak lagi mengasumsikan
+    "OpenRouter" (memakai `endpoint_label`).
+  - `autoclip_colab.py`: `colab_is_openrouter()` + `colab_model_is_free(model, base_url)`
+    (aturan sama dengan `src/config.py`), pengecekan `resolve_env()` memakai base URL
+    dari `.env` > Colab Secret `OPENROUTER_BASE_URL` > default (nilai dari secret ikut
+    ditulis ke `.env`), `OPENROUTER_TIMEOUT` masuk `ENV_ORDER`/`DEFAULTS`,
+    `--check-env` menampilkan endpoint/model/timeout LLM, pesan bantuan `--model` dan
+    saran kode keluar 5 diperbarui untuk gateway sendiri.
+  - `.env.example`: komentar bahwa model dipakai apa adanya, contoh base URL 9router
+    (localhost/ngrok, wajib `/v1`), dan `OPENROUTER_TIMEOUT=120`.
+  - `CARA_PAKAI.md`: bagian baru **1b. Pakai 9router / gateway OpenAI-compatible
+    sendiri** (set base URL sekali, key+model saja, catatan Caveman Mode dan Colab).
+  - `README.md`: contoh `.env` untuk 9router + baris tabel `OPENROUTER_BASE_URL` dan
+    `OPENROUTER_TIMEOUT`.
+  - `AGENTS.md`: aturan `:free` diperjelas hanya untuk OpenRouter resmi; gateway
+    sendiri memakai model apa adanya (P-030/F-030); perintah uji baru ditambahkan.
+  - `tests/test_model_gratis.py`: dipecah per base URL — OpenRouter resmi tetap
+    menolak model berbayar, sedangkan localhost/127.0.0.1/ngrok menerima nama model
+    9router apa adanya dan tidak mengubah namanya.
+  - `tests/test_llm_provider.py` (baru, 7 bagian, tanpa jaringan): URL tujuan
+    `{base_url}/chat/completions`, model tidak diubah, timeout dari parameter,
+    header OpenRouter tidak dikirim ke gateway, respons `{"error": ...}` HTTP 200,
+    content kosong/choices hilang/bukan JSON, HTTP 401 tidak membocorkan key, dan
+    `OPENROUTER_TIMEOUT` dibaca config.
+- Alasan: 9router (dan gateway OpenAI-compatible lain) menyajikan model dengan nama
+  provider/combo apa adanya, jadi tidak pernah berakhiran `:free`. Aturan gratis yang
+  dirancang untuk OpenRouter resmi (P-010) ikut memblokir endpoint milik pengguna.
+  Sesuai permintaan pengguna, perilakunya disamakan dengan opsi "custom OpenAI" di tool
+  lain: **base URL diisi sekali di `.env`**, lalu cukup API key + nama model — tanpa
+  pemilihan model otomatis dan tanpa menambahkan `:free`. Blokir keras tetap berlaku
+  saat endpoint-nya benar-benar `openrouter.ai`, sehingga kuota berbayar OpenRouter
+  masih tidak mungkin terpakai tanpa disadari.
+- Hasil pengujian ulang:
+  - `tests/test_model_gratis.py` LULUS: `is_openrouter()` benar untuk OpenRouter
+    (termasuk tanpa skema) dan False untuk localhost/ngrok/kosong; 6 model `:free`
+    diterima di OpenRouter; 5 model berbayar ditolak di OpenRouter; 4 nama model
+    9router (`combo/free-coding`, `cc/claude-sonnet-4.5`, `openai/gpt-5`, `qwen3-coder`)
+    diterima apa adanya di 3 base URL gateway; keputusan `src/config.py` dan runner
+    Colab identik untuk 15 model x 5 endpoint.
+  - `tests/test_llm_provider.py` LULUS (7 bagian): request ke
+    `http://localhost:20128/v1/chat/completions`, body `model=combo/free-coding`
+    (tidak berubah), timeout 99 dari parameter, tanpa header OpenRouter, segmen
+    tervalidasi; OpenRouter resmi tetap mendapat `HTTP-Referer`/`X-Title`;
+    `{"error": ...}` HTTP 200 -> pesan "localhost mengembalikan error tanpa choices:
+    No credentials for provider"; content kosong/choices kosong/bukan JSON masing-masing
+    pesan jelas; HTTP 401 menyebut host dan tidak membocorkan API key;
+    `OPENROUTER_TIMEOUT=300` -> `cfg.llm_timeout=300`.
+  - Regresi: `test_highlight` 7/7, `test_env_writer`, `test_progress`, `test_bot_check`,
+    `test_subtitles`, `test_merge`, `test_cuda_diagnostics`,
+    `test_transcribe_cuda_fallback` semuanya LULUS; `py_compile` semua file .py OK;
+    `main.py --help` dan `autoclip_colab.py --help` EXIT=0.
+  - Alur penuh dengan mock OpenRouter (`--env tests/.env.test --max-clips 1
+    --keep-temp`): 23 segmen, 1 segmen terpilih, 1 klip 1080x1920 h264+aac durasi 38,0s
+    di `output/`, EXIT=0.
+  - `autoclip_colab.py --check-env --skip-install`: menampilkan baris baru
+    `Endpoint LLM : https://openrouter.ai/api/v1`, `Model LLM : ...`,
+    `Timeout LLM : 120 detik`, dan `.env` pengguna **tidak berubah** (md5 sama).
+  - `load_config()` pada `.env` pengguna yang ada: base URL OpenRouter, model `:free`,
+    timeout 120, API key tersedia -> tetap valid (tidak ada regresi).

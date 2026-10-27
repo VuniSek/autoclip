@@ -871,3 +871,35 @@
   frame 1080x1920 jadi jauh lebih boros.
 - Perbaikan (lihat `fix.md` F-029).
 - Status: FIXED (lihat `fix.md` F-029)
+
+## P-030 | model gabungan 9router ditolak karena tidak berakhiran `:free`
+- Waktu: 2026-10-27
+- File/langkah terkait: `src/config.py` -> `_validate()` (+ `model_is_free()`),
+  `autoclip_colab.py` -> `resolve_env()` (+ `colab_model_is_free()`),
+  `src/highlight.py` -> `_call_once()`, `OPENROUTER_BASE_URL` di `.env`
+- Pesan error / gejala (salin apa adanya, tanpa API key):
+  ```
+  [KONFIGURASI BELUM LENGKAP] OPENROUTER_MODEL='<nama-combo-9router>' tidak berakhiran ':free'.
+  Proyek ini hanya mengizinkan model GRATIS. Ganti nilainya di .env dengan nama model
+  yang berakhiran ':free' (contoh: 'google/gemini-2.0-flash-exp:free').
+  ```
+  Padahal `OPENROUTER_BASE_URL` sudah diarahkan ke gateway 9router
+  (`http://localhost:20128/v1` atau URL ngrok). Program berhenti sebelum pipeline jalan.
+- Dugaan penyebab:
+  1. Penegakan model gratis (P-010/P-022) hanya mengenal dua bentuk: sufiks `:free`
+     dan router `openrouter/free`. Model yang disajikan gateway OpenAI-compatible
+     milik pengguna (9router) memakai nama provider/combo apa adanya, jadi tidak
+     pernah lolos.
+  2. Pengecekan tidak melihat `OPENROUTER_BASE_URL`, padahal endpoint-nya sudah bukan
+     OpenRouter resmi. Akibatnya aturan yang seharusnya melindungi kuota OpenRouter
+     ikut memblokir endpoint lokal/tunnel milik pengguna.
+  3. Pengecekan ada di dua tempat (`src/config.py` dan `autoclip_colab.py`) sehingga
+     keduanya harus diubah dengan aturan yang sama.
+  4. Timeout LLM masih hard-code 120 detik, padahal combo 9router dengan fallback
+     bisa lebih lama; respons error gateway juga bisa datang dengan HTTP 200
+     (`{"error": ...}`) tanpa `choices`, yang pesannya belum jelas.
+- Perbaikan (lihat `fix.md` F-030): pengecekan `:free` hanya berlaku untuk
+  OpenRouter resmi (`is_openrouter()`); gateway sendiri memakai model apa adanya
+  lewat `model_is_free(model, base_url)`; `OPENROUTER_TIMEOUT` bisa diatur; pesan
+  error menyebut host endpoint dan menangani respons error gateway dengan jelas.
+- Status: FIXED (lihat `fix.md` F-030)

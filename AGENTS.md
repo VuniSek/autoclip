@@ -96,13 +96,17 @@ autoclip/
 - **Jangan hardcode nama model.** Semua nilai konfigurasi dibaca dari `.env`.
 - Jika `OPENROUTER_API_KEY` atau `OPENROUTER_MODEL` masih berisi placeholder,
   hentikan program dengan **pesan error yang jelas** (jangan diam-diam jalan).
-- **Blokir keras model berbayar:** jika `OPENROUTER_MODEL` tidak berakhiran `:free`,
-  program **WAJIB** berhenti dengan pesan error — bukan hanya memberi peringatan.
-  Proyek ini hanya mengizinkan model gratis (lihat `problem.md` P-010 / `fix.md` F-010).
-  Pengecekan dilakukan lewat `src/config.py::model_is_free()` (helper yang juga
-  menerima router gratis `openrouter/free`, lihat P-022) — jangan lagi mengecek
+- **Blokir keras model berbayar HANYA di OpenRouter resmi:** jika
+  `OPENROUTER_BASE_URL` menunjuk `openrouter.ai` dan `OPENROUTER_MODEL` tidak berakhiran
+  `:free`, program **WAJIB** berhenti dengan pesan error — bukan hanya memberi peringatan.
+  Proyek ini hanya mengizinkan model gratis di OpenRouter (lihat `problem.md` P-010 /
+  `fix.md` F-010). Endpoint OpenAI-compatible milik pengguna (mis. 9router di
+  `http://localhost:20128/v1` atau lewat ngrok) memakai model **apa adanya**: jangan
+  pilih model otomatis dan jangan tambahkan `:free` (lihat P-030 / F-030).
+  Pengecekan dilakukan lewat `src/config.py::model_is_free(model, base_url)` (helper yang
+  juga menerima router gratis `openrouter/free`, lihat P-022) — jangan lagi mengecek
   sufiks `:free` secara terpisah di tempat lain, karena aturannya bisa berbeda.
-  Daftar model gratis: `https://openrouter.ai/models?max_price=0`
+  Daftar model gratis OpenRouter: `https://openrouter.ai/models?max_price=0`
 - Model gratis OpenRouter sering rate limit dan kadang mengembalikan JSON berantakan:
   wajib retry dengan backoff, hapus pembungkus ```json sebelum parsing, dan validasi
   hasil (start < end, durasi sesuai batas, tidak melebihi durasi video).
@@ -178,8 +182,11 @@ venv/bin/python tests/test_bot_check.py
 # uji diagnostik CUDA Colab runner (tanpa GPU, probe disimulasikan)
 venv/bin/python tests/test_cuda_diagnostics.py
 
-# uji aturan model gratis (suffix :free + router openrouter/free)
+# uji aturan model gratis (suffix :free + router openrouter/free + gateway sendiri)
 venv/bin/python tests/test_model_gratis.py
+
+# uji provider OpenAI-compatible (9router/ngrok): URL, model apa adanya, timeout, error
+venv/bin/python tests/test_llm_provider.py
 
 # uji penulisan .env di runner Colab (kunci pengguna tidak boleh hilang)
 venv/bin/python tests/test_env_writer.py

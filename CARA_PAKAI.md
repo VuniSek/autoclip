@@ -14,6 +14,8 @@ cp .env.example .env                            # buat file konfigurasi
 nano .env                                       # isi 2 baris ini:
 #   OPENROUTER_API_KEY=sk-or-v1-xxxxxxxxxxxxxxxx
 #   OPENROUTER_MODEL=google/gemini-2.0-flash-exp:free
+#   (opsional) OPENROUTER_BASE_URL=https://openrouter.ai/api/v1
+#   (opsional) OPENROUTER_TIMEOUT=120
 ```
 
 Cek dulu semuanya siap:
@@ -36,6 +38,48 @@ venv/bin/python main.py --input input/vidio-saya.mp4
 
 Hasil ada di `output/`: `01_<judul>_klip1_....mp4` (9:16 + subtitle terbakar),
 lalu `.srt` dan `.ass` (subtitle yang bisa diedit).
+
+---
+
+## 1b. Pakai 9router / gateway OpenAI-compatible sendiri
+
+9router adalah gateway lokal (`http://localhost:20128/v1`) yang menggabungkan banyak
+provider, termasuk **combo**. Perlakuan di proyek ini sama seperti opsi "custom OpenAI"
+di tool lain: **base URL diisi sekali di `.env`**, setelah itu tinggal ganti API key dan
+nama model. Model dipakai **apa adanya** — tidak dipilih otomatis dan tidak ditambahi
+`:free`.
+
+```bash
+# 1) isi .env (sekali saja)
+#    OPENROUTER_BASE_URL=http://localhost:20128/v1
+#    OPENROUTER_API_KEY=<key dari dashboard 9router>
+#    OPENROUTER_MODEL=<nama model/combo PERSIS seperti di dashboard>
+#    OPENROUTER_TIMEOUT=180        # opsional: combo dengan fallback bisa lambat
+nano .env
+
+# 2) cek endpoint + model yang benar-benar dipakai
+venv/bin/python main.py --verbose --input input/vidio-saya.mp4 --max-clips 1
+
+# 3) jalankan seperti biasa
+venv/bin/python main.py --input input/vidio-saya.mp4 --max-clips 3
+```
+
+Kalau 9router diakses lewat ngrok, ganti base URL-nya (tetap harus berakhiran `/v1`):
+
+```env
+OPENROUTER_BASE_URL=https://xxxx-xx-xx-xx-xx.ngrok-free.app/v1
+```
+
+Catatan penting:
+
+| Hal | Keterangan |
+|---|---|
+| Nama model | salin dari dashboard 9router; boleh nama combo/provider apa pun |
+| Base URL | **wajib** berakhiran `/v1` (jalur chat completions: `/v1/chat/completions`) |
+| Model `:free` | hanya diwajibkan kalau `OPENROUTER_BASE_URL` = OpenRouter resmi |
+| Caveman Mode | **matikan** untuk route ini; prompt pemadatnya bisa merusak output JSON |
+| Gateway mati | pesan error menyebut host-nya (mis. `HTTP 502 dari localhost`) |
+| Colab | `localhost` tidak terjangkau dari Colab → pakai URL ngrok/tunnel |
 
 ---
 
@@ -136,7 +180,8 @@ venv/bin/python main.py --input input/vidio-saya.mp4
 
 1. **Runtime → Change runtime type → GPU**.
 2. **Runtime → Manage secrets → New secret** → nama `OPENROUTER_API_KEY`,
-   isi API key OpenRouter gratis.
+   isi API key OpenRouter gratis. Kalau memakai 9router lewat ngrok, tambahkan
+   secret kedua `OPENROUTER_BASE_URL` = `https://xxxx.ngrok-free.app/v1`.
 3. Pastikan repo di GitHub **lengkap dengan folder `assets/`** (di situ model
    deteksi wajah berada).
 
@@ -174,6 +219,15 @@ Kalau `CUDA : siap=False`, jalankan sekali **tanpa** `--skip-install`
 ```
 
 ```python
+# 9router lewat ngrok (localhost tidak terjangkau dari Colab):
+# simpan OPENROUTER_BASE_URL + OPENROUTER_API_KEY sebagai Colab Secrets,
+# lalu model-nya cukup nama combo apa adanya.
+!python /content/autoclip/autoclip_colab.py \
+    --input "https://www.youtube.com/watch?v=VIDEO_ID" \
+    --model "combo/free-coding"
+```
+
+```python
 # dengan crop ikut wajah + pengaturan face tracking
 !python /content/autoclip/autoclip_colab.py \
     --input "https://www.youtube.com/watch?v=VIDEO_ID" \
@@ -207,13 +261,14 @@ drive.mount('/content/drive')
 | Face tracking | menambah ~10–20 detik per klip (deteksi wajah jalan di CPU) |
 | Verifikasi bot YouTube | bukan bug program: pakai file lokal atau kirim cookie (`-- --cookies cookies.txt`) |
 
-### 7.5 Kalau model gratis kena rate limit
+### 7.5 Kalau model/endpoint LLM gagal memilih segmen
 
 ```python
 # 1) tunggu beberapa menit, lalu ulangi tanpa transkripsi ulang
 !python /content/autoclip/autoclip_colab.py ... -- --reuse-transcript
 
-# 2) ganti model gratis lain di .env (semua berakhiran :free)
+# 2) OpenRouter: ganti model gratis lain di .env (berakhiran :free)
+#    9router/ngrok: pastikan gateway hidup dan OPENROUTER_BASE_URL berakhiran /v1
 # 3) perkecil durasi klip
 !python /content/autoclip/autoclip_colab.py ... -- --max-seconds 40
 ```
@@ -248,7 +303,7 @@ drive.mount('/content/drive')
 |---|---|
 | `--input`, `-i` | URL atau path file di Colab |
 | `--repo URL` | clone repo kalau belum ada |
-| `--model NAMA` | model OpenRouter gratis (wajib `:free`) |
+| `--model NAMA` | model OpenRouter (`:free`) atau nama model/combo 9router apa adanya |
 | `--api-key KEY` | API key (alternatif dari Colab Secrets) |
 | `--env-file PATH` | pakai file `.env` tertentu |
 | `--whisper-model NAMA` | `tiny`/`base`/`small`/`medium`/`large-v3` |
