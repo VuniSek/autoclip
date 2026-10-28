@@ -903,3 +903,25 @@
   lewat `model_is_free(model, base_url)`; `OPENROUTER_TIMEOUT` bisa diatur; pesan
   error menyebut host endpoint dan menangani respons error gateway dengan jelas.
 - Status: FIXED (lihat `fix.md` F-030)
+
+## P-031 | proxy membalas SSE/stream walau `stream=false` + halaman peringatan ngrok
+- Waktu: 2026-10-28
+- File/langkah terkait: `src/highlight.py` -> `_call_once()` (permintaan
+  `POST {base_url}/chat/completions`), endpoint gateway OpenAI-compatible
+  (9router via `localhost:20128` atau tunnel ngrok)
+- Pesan error / gejala (salin apa adanya, tanpa API key):
+  ```
+  [highlight] percobaan 1/3 gagal: Respons <host> bukan JSON: data: {"id":"...","choices":[{"delta":{"content":"...
+  ```
+  atau body berisi halaman HTML peringatan ngrok (`<html>ngrok warning</html>`)
+  sehingga dianggap "bukan JSON" walau HTTP 200.
+- Dugaan penyebab:
+  1. Sebagian proxy/gateway memaksa streaming meski permintaan tidak meminta
+     (`stream` tidak dikirim / diabaikan), jadi body balasan berupa SSE
+     (`data: {...}` per baris + `data: [DONE]`), bukan satu objek JSON.
+  2. `resp.json()` langsung dipakai tanpa cadangan, sehingga body SSE selalu
+     dianggap gagal parse.
+  3. Endpoint lewat tunnel ngrok mengembalikan halaman peringatan browser untuk
+     klien tanpa header khusus; header `ngrok-skip-browser-warning` belum dikirim.
+- Perbaikan (lihat `fix.md` F-031).
+- Status: FIXED (lihat `fix.md` F-031)

@@ -295,6 +295,37 @@ def validate_segments(
 
 # ---------------------------------------------------------------- API call
 
+def _parse_sse(text: str) -> dict | None:
+    """Gabungkan stream SSE (data: {...chunk...}) menjadi satu respons chat.
+
+    Sebagian proxy memaksa streaming walau diminta stream=false. Return dict
+    berformat non-stream, atau None bila teks bukan SSE yang valid.
+    """
+    parts: list[str] = []
+    seen = False
+    for line in text.splitlines():
+        line = line.strip()
+        if not line.startswith("data:"):
+            continue
+        chunk = line[5:].strip()
+        if chunk == "[DONE]":
+            break
+        try:
+            obj = json.loads(chunk)
+        except ValueError:
+            continue
+        seen = True
+        if isinstance(obj, dict) and obj.get("error") and not obj.get("choices"):
+            return obj
+        for choice in (obj.get("choices") or []) if isinstance(obj, dict) else []:
+            piece = (choice.get("delta") or choice.get("message") or {}).get("content")
+            if piece:
+                parts.append(piece)
+    if not seen:
+        return None
+    return {"choices": [{"message": {"content": "".join(parts)}}]}
+
+
 def _call_once(
     api_key: str,
     base_url: str,
@@ -310,10 +341,13 @@ def _call_once(
         ],
         "temperature": 0.7,
         "max_tokens": 2000,
+        "stream": False,
     }
     headers = {
         "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json",
+        # Lewati halaman peringatan ngrok bila endpoint lewat tunnel ngrok.
+        "ngrok-skip-browser-warning": "true",
     }
     if _is_openrouter_url(base_url):
         # Header atribusi hanya relevan untuk OpenRouter; gateway lokal
@@ -334,8 +368,10 @@ def _call_once(
     try:
         data = resp.json()
     except ValueError as exc:
-        snippet = _sanitize(resp.text[:300], api_key)
-        raise HighlightError(f"Respons {label} bukan JSON: {snippet}") from exc
+        data = _parse_sse(resp.text)
+        if data is None:
+            snippet = _sanitize(resp.text[:300], api_key)
+            raise HighlightError(f"Respons {label} bukan JSON: {snippet}") from exc
     # Sebagian gateway (termasuk 9router) bisa membalas HTTP 200 berisi
     # {"error": ...} tanpa choices. Pesan ini harus jelas, bukan KeyError.
     if isinstance(data, dict) and data.get("error") and not data.get("choices"):

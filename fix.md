@@ -1134,3 +1134,27 @@
     `Timeout LLM : 120 detik`, dan `.env` pengguna **tidak berubah** (md5 sama).
   - `load_config()` pada `.env` pengguna yang ada: base URL OpenRouter, model `:free`,
     timeout 120, API key tersedia -> tetap valid (tidak ada regresi).
+
+## F-031 | memperbaiki P-031
+- Perubahan (file dan apa yang diubah):
+  - `src/highlight.py`: fungsi baru `_parse_sse(text)` yang menggabungkan body
+    SSE (`data: {...}` per baris, berhenti di `data: [DONE]`) menjadi satu respons
+    bentuk non-stream (`{"choices":[{"message":{"content": "..."}}]}`), membaca
+    `delta.content` maupun `message.content`, dan mengembalikan objek `{"error": ...}`
+    bila chunk memuat error tanpa `choices`. Mengembalikan `None` kalau body bukan SSE.
+  - `src/highlight.py`: `_call_once()` mengirim `"stream": False` di payload,
+    menambahkan header `ngrok-skip-browser-warning: true`, dan memakai `_parse_sse()`
+    sebagai cadangan saat `resp.json()` gagal (error "bukan JSON" hanya muncul kalau
+    body memang bukan JSON dan bukan SSE).
+- Alasan: gateway/proxy boleh memaksa streaming; klien harus tetap bisa membaca
+  jawabannya tanpa mengganti jalur kode lain, dan halaman peringatan ngrok tidak lagi
+  menggagalkan panggilan LLM.
+- Hasil pengujian ulang:
+  - Uji langsung `_parse_sse()`: chunk `delta.content` tergabung utuh menjadi
+    `[{"start": 1, "end": 9}]`; body HTML mengembalikan `None`; chunk
+    `{"error": ...}` mengembalikan objek error (lalu ditangani pesan
+    "mengembalikan error tanpa choices").
+  - `venv/bin/python tests/test_highlight.py`: 7/7 skenario LULUS.
+  - `venv/bin/python tests/test_llm_provider.py`: semua pemeriksaan LULUS
+    (termasuk kasus "bukan JSON" -> `<html>ngrok warning</html>` tetap memberi
+    pesan jelas).
